@@ -38,6 +38,7 @@ REQUIRED_ACTIONS: Tuple[str, ...] = (
 
 _MAIN_ENTRIES: Tuple[Tuple[str, str], ...] = (
     ("检查内核更新", "check"),
+    ("更新方式：{method}（切换）", "method"),
     ("预览内核更新（dry-run）", "dry_run"),
     ("立即安装内核更新", "update"),
     ("程序自更新", "self_update"),
@@ -177,11 +178,18 @@ _CHANNEL_LABELS = {
     "longterm:6.12": "LTS 6.12",
 }
 
-_METHOD_CHOICES: Tuple[str, ...] = ("build", "package")
+_METHOD_CHOICES: Tuple[str, ...] = ("package", "build")
 _METHOD_LABELS = {
     "build": "源码编译 build（kernel.org）",
     "package": "发行版预编译包 package（apt/dnf）",
 }
+
+
+def _main_labels(config: Config) -> List[str]:
+    return [
+        label.format(method=config.update_method) if "{method}" in label else label
+        for label, _ in _MAIN_ENTRIES
+    ]
 
 
 def _stream_is_tty(stream) -> bool:
@@ -725,9 +733,9 @@ def _run_curses(
 
     selected = 0
     message = ""
-    labels = [label for label, _ in _MAIN_ENTRIES]
 
     while True:
+        labels = _main_labels(config)
         _draw_screen(
             curses,
             stdscr,
@@ -760,6 +768,11 @@ def _run_curses(
         action_key = _MAIN_ENTRIES[selected][1]
         if action_key == "quit":
             return 0
+        if action_key == "method":
+            config, message = _method_selector(
+                curses, stdscr, config, config_path, version
+            )
+            continue
         if action_key == "settings":
             config, message = _settings_loop(
                 curses, stdscr, config, config_path, version

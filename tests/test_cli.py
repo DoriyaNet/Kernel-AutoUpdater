@@ -27,10 +27,11 @@ def sample_feed():
     return _parse_feed(json.dumps(sample_payload()))
 
 
-def make_config(temp):
+def make_config(temp, method="build"):
     config_path = Path(temp) / "config.ini"
     config_path.write_text(
         """[updater]
+update_method = {method}
 channel = stable
 work_dir = {work}
 log_file = {log}
@@ -38,7 +39,11 @@ auto_update = false
 
 [build]
 config_source = defconfig
-""".format(work=Path(temp) / "work", log=Path(temp) / "kau.log"),
+""".format(
+            method=method,
+            work=Path(temp) / "work",
+            log=Path(temp) / "kau.log",
+        ),
         encoding="utf-8",
     )
     return config_path
@@ -118,14 +123,7 @@ class CliTests(unittest.TestCase):
 
     def test_package_auto_does_not_fetch_kernelorg(self):
         with tempfile.TemporaryDirectory() as temp:
-            config_path = make_config(temp)
-            text = config_path.read_text(encoding="utf-8")
-            config_path.write_text(
-                text.replace(
-                    "[updater]\n", "[updater]\nupdate_method = package\n"
-                ),
-                encoding="utf-8",
-            )
+            config_path = make_config(temp, method="package")
             config = Config.load(config_path, explicit=True)
             package = PackageUpdate(
                 manager="apt",
@@ -160,14 +158,7 @@ class CliTests(unittest.TestCase):
 
     def test_package_update_dry_run_skips_install(self):
         with tempfile.TemporaryDirectory() as temp:
-            config_path = make_config(temp)
-            text = config_path.read_text(encoding="utf-8")
-            config_path.write_text(
-                text.replace(
-                    "[updater]\n", "[updater]\nupdate_method = package\n"
-                ),
-                encoding="utf-8",
-            )
+            config_path = make_config(temp, method="package")
             config = Config.load(config_path, explicit=True)
             package = PackageUpdate(
                 manager="apt",

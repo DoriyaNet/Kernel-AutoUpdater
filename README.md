@@ -2,24 +2,22 @@
 
 `kau` 是一个面向 Linux 内核的 CLI 自动更新器，提供两种更新方式：
 
-- **build（默认）**：从 kernel.org 检查 stable / longterm 内核，下载并校验源码，
-  沿用当前内核的 `.config` 在本机编译，再安装并刷新 initramfs / GRUB。
-- **package**：直接使用发行版仓库（apt / dnf）里的预编译内核包，不下载内核源码、
+- **package（默认）**：直接使用发行版仓库（apt / dnf）里的预编译内核包，不下载内核源码、
   不占编译所需的 CPU / 内存，由发行版包管理器完成安装、initramfs 和引导项更新。
+- **build（可选）**：从 kernel.org 检查 stable / longterm 内核，下载并校验源码，
+  沿用当前内核的 `.config` 在本机编译，再安装并刷新 initramfs / GRUB。
 
 两种方式都会保留旧内核用于回滚。
 
-> **重要：** 本工具直接执行 `make install`，不经过发行版包管理器；默认也不签名
-> 内核。首次使用请先执行 `kau update --dry-run`，并确保你有控制台 / 救援模式，
-> 可以在新内核无法启动时选择旧内核。UEFI Secure Boot 开启时，未签名内核无法启动，
-> 工具会默认拒绝更新。
-
-> 上述 `make install`、未签名和 Secure Boot 限制仅针对 `build` 模式。`package`
-> 模式调用 `apt-get` / `dnf`，使用发行版签名内核，不执行本地编译。
+> **重要：** `build` 模式直接执行 `make install`，不经过发行版包管理器，默认也不
+> 签名内核；Secure Boot 开启时工具会拒绝安装未签名内核。`package` 模式调用
+> `apt-get` / `dnf` 安装发行版签名内核，不执行本地编译。首次使用建议先执行
+> `kau update --dry-run`，并确保你有控制台 / 救援模式可以选择旧内核。
 
 ## 功能
 
 - 检查 kernel.org 的 stable、longterm、指定 stable 系列或 mainline 版本
+- 检查 apt / dnf 仓库中发行版内核元包的候选版本
 - 下载 `.tar.xz`，使用目录级 `sha256sums.asc` 做 SHA-256 校验
 - 可选 GPG 校验官方 `linux-*.tar.sign`（使用本地 kernel.org 公钥环）
 - 从当前运行内核同步 `.config`，执行 `make olddefconfig` 后构建
@@ -39,21 +37,29 @@
 
 ```ini
 [updater]
-update_method = build   # build | package
+update_method = package   # package | build
 ```
 
 也可以只对单次命令覆盖：
 
 ```bash
-sudo kau check --method package
-sudo kau update --method package --dry-run
-sudo kau update --method package -y
+sudo kau check
+sudo kau update --dry-run
+sudo kau update -y
+
+# 临时改用源码编译
+sudo kau update --method build -y
 ```
 
 | 方式 | 内核来源 | 本机资源 | 适合场景 |
 | --- | --- | --- | --- |
 | `build` | kernel.org 原版源码 | 需要编译工具链，通常 10–60 分钟 CPU 时间 | 需要自定义 `.config`、补丁、`-kau` 后缀或最新主线 |
 | `package` | apt / dnf 发行版仓库 | 只下载二进制包，通常几十秒到几分钟 | 日常安全更新、低配 VPS / 笔记本、希望 Secure Boot 继续使用发行版签名内核 |
+
+`package` 现在是默认值。已有配置如果显式写了 `update_method = build`，仍会继续使用
+源码编译；把它改成 `package`（或在 TUI 主菜单选择“更新方式”）即可切换。
+旧配置中完全没有 `update_method` 时，升级后会按新的默认值 `package` 处理；如果
+需要继续源码编译，请显式补上 `update_method = build`。
 
 `package` 模式使用发行版自己的内核包，因此：
 
@@ -88,8 +94,8 @@ sudo kau update --method package -y
 
 ## 一键安装
 
-要求：Linux、Python 3.9+、root、`curl` 或 `wget`。`build` 模式至少需要 12 GiB
-空闲磁盘（可配置）；`package` 模式默认只需 2 GiB。
+要求：Linux、Python 3.9+、root、`curl` 或 `wget`。默认 `package` 模式只需 2 GiB
+空闲磁盘；切换到 `build` 模式后至少需要 12 GiB（可配置）。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DoriyaNet/Kernel-AutoUpdater/master/install.sh | sudo bash
@@ -156,6 +162,7 @@ sudo kau tui    # 别名
 菜单内置：
 
 - 检查更新、预览更新（dry-run）、立即安装
+- 主菜单直接切换更新方式：`package`（发行版预编译包）或 `build`（源码编译）
 - 程序自更新（更新 `kau` 本身）
 - 状态、已安装内核、doctor 自检、日志查看
 - 启用 / 停用 systemd timer
@@ -177,6 +184,7 @@ curses，任务结束后按 Enter 返回菜单。
 建议先手动跑一次完整流程，确认新内核可以启动：
 
 ```bash
+sudo kau update --dry-run
 sudo kau update -y
 sudo reboot
 ```
@@ -189,17 +197,17 @@ kau kernels
 kau status
 ```
 
+默认 `package` 模式会从 apt / dnf 下载并安装发行版内核，耗时主要取决于软件源
+速度。需要源码编译时使用：
+
+```bash
+sudo kau update --method build --dry-run
+sudo kau update --method build -y
+```
+
 首次编译通常需要 10–60 分钟，取决于 CPU 和配置。`jobs = 0` 表示按 CPU 核心数
 并行编译；内存较小的机器请手动降低 `jobs`，避免 OOM。
 
-如果不想编译，可以先试运行并改用发行版包：
-
-```bash
-sudo kau update --method package --dry-run
-sudo kau update --method package -y
-```
-
-包模式下 apt / dnf 会下载并安装发行版内核，耗时主要取决于软件源速度。
 
 ## 配置
 
@@ -207,8 +215,8 @@ sudo kau update --method package -y
 
 ```ini
 [updater]
-# build | package
-update_method = build
+# package | build
+update_method = package
 # stable | longterm | longterm:6.12 | mainline
 channel = stable
 auto_update = false
@@ -303,7 +311,7 @@ Debian / Ubuntu 的内核配置会引用发行版签名密钥路径，而原版 
 - `--keep-build`：复用 `work_dir/build/linux-*`，便于失败后继续排查
 - `--defconfig`：本次改用 `make defconfig`
 - `--jobs N`：本次覆盖并行编译数
-- `--method package`：本次改用发行版预编译包（`--method build` 可临时切回源码编译）
+- `--method build`：本次切回源码编译；不带该参数时使用默认的 `package` 模式
 
 成功安装后默认删除编译目录以回收磁盘；失败时会保留，便于排查。若需要保留，
 设置 `keep_build_dir = true` 或使用 `--keep-build`。

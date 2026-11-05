@@ -47,7 +47,7 @@ class ConfigEditorTests(unittest.TestCase):
             path.write_text(DEFAULT_CONFIG_TEXT, encoding="utf-8")
             config = Config.load(path, explicit=True)
         self.assertEqual(config.channel, "stable")
-        self.assertEqual(config.update_method, "build")
+        self.assertEqual(config.update_method, "package")
         for section, key in expected:
             with self.subTest(section=section, key=key):
                 self.assertIsNotNone(get_value(DEFAULT_CONFIG_TEXT, section, key))

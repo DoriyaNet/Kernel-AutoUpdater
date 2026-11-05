@@ -9,7 +9,7 @@ class ConfigTests(unittest.TestCase):
     def test_defaults(self):
         config = Config()
         self.assertEqual(config.channel, "stable")
-        self.assertEqual(config.update_method, "build")
+        self.assertEqual(config.update_method, "package")
         self.assertEqual(config.package_manager, "auto")
         self.assertEqual(config.kernel_packages, "auto")
         self.assertFalse(config.auto_update)
@@ -53,6 +53,7 @@ update_bootloader = yes
             path.write_text(text, encoding="utf-8")
             config = Config.load(path, explicit=True)
         self.assertEqual(config.channel, "longterm:6.12")
+        self.assertEqual(config.update_method, "package")
         self.assertTrue(config.auto_update)
         self.assertTrue(config.auto_reboot)
         self.assertEqual(config.reboot_delay_minutes, 15)

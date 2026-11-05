@@ -19,6 +19,11 @@ def _noop_actions():
 
 
 class MenuFallbackTests(unittest.TestCase):
+    def test_main_menu_shows_current_update_method(self):
+        labels = menu._main_labels(Config(update_method="package"))
+        self.assertIn("更新方式：package（切换）", labels)
+        self.assertIn("method", [key for _, key in menu._MAIN_ENTRIES])
+
     def test_non_tty_returns_2_without_importing_curses(self):
         self.assertNotIn("curses", menu.__dict__)
         stderr = io.StringIO()

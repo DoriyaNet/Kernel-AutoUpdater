@@ -56,7 +56,7 @@ def _as_path(value: str, key: str) -> Path:
 class Config:
     source_path: Optional[Path] = None
     channel: str = "stable"
-    update_method: str = "build"
+    update_method: str = "package"
     feed_url: str = DEFAULT_FEED_URL
     feed_timeout: int = 30
     download_timeout: int = 120
