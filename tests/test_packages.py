@@ -84,6 +84,78 @@ class PackageListTests(unittest.TestCase):
             ("kernel",),
         )
 
+    def test_default_packages_follow_running_kernel_flavor(self):
+        self.assertEqual(
+            default_packages(
+                "apt",
+                {"ID": "debian"},
+                machine="x86_64",
+                running_release="6.12.115+deb13.1-cloud",
+            ),
+            (
+                "linux-image-cloud",
+                "linux-headers-cloud",
+            ),
+        )
+        self.assertEqual(
+            default_packages(
+                "apt",
+                {"ID": "ubuntu"},
+                machine="x86_64",
+                running_release="6.8.0-45-lowlatency",
+            ),
+            (
+                "linux-image-lowlatency",
+                "linux-headers-lowlatency",
+            ),
+        )
+
+    def test_build_backend_falls_back_when_flavor_is_unavailable(self):
+        def handler(command):
+            if command[:2] == ["apt-cache", "policy"]:
+                return result(
+                    "{}:\n  Candidate: (none)\n".format(command[-1])
+                )
+            return result()
+
+        runner = FakeRunner(
+            handler,
+            available=("apt-get", "apt-cache", "dpkg-query", "dpkg"),
+        )
+        backend = build_backend(
+            Config(package_manager="apt", kernel_packages="auto"),
+            runner,
+            os_release={"ID": "debian"},
+            running_release="6.9.0-weird",
+        )
+        self.assertEqual(
+            backend.packages,
+            ("linux-image-amd64", "linux-headers-amd64"),
+        )
+
+    def test_build_backend_uses_available_running_flavor(self):
+        def handler(command):
+            if command[:2] == ["apt-cache", "policy"]:
+                return result(
+                    "{}:\n  Candidate: 6.12.115-2\n".format(command[-1])
+                )
+            return result()
+
+        runner = FakeRunner(
+            handler,
+            available=("apt-get", "apt-cache", "dpkg-query", "dpkg"),
+        )
+        backend = build_backend(
+            Config(package_manager="apt", kernel_packages="auto"),
+            runner,
+            os_release={"ID": "debian"},
+            running_release="6.12.115+deb13.1-cloud",
+        )
+        self.assertEqual(
+            backend.packages,
+            ("linux-image-cloud", "linux-headers-cloud"),
+        )
+
     def test_detect_manager_uses_distro_and_commands(self):
         runner = FakeRunner(
             lambda command: result(),

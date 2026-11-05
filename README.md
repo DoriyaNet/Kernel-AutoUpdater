@@ -74,10 +74,12 @@ sudo kau update --method build -y
 `kau auto` 在安装前会按 `packages.refresh_package_index` 执行 `apt-get update`
 或 `dnf makecache --refresh`。
 
-`kernel_packages = auto` 在 Ubuntu 上选择 `linux-image-generic` /
-`linux-headers-generic`，在 Debian 上选择 `linux-image-<arch>` /
-`linux-headers-<arch>`。如果你运行的是 `lowlatency`、`aws`、`rt`、`linux-lts`
-等 flavor，请显式设置对应的内核包名。
+`kernel_packages = auto` 会优先沿用当前运行内核的 flavor，例如 `generic`、
+`lowlatency`、`aws`、`cloud`、`rt-amd64`，因此通常不会把
+cloud / lowlatency 机器静默切换到通用内核。若 apt 仓库中找不到该 flavor，
+则回退到 Ubuntu 的 `linux-image-generic` / `linux-headers-generic`，或
+Debian 的 `linux-image-<arch>` / `linux-headers-<arch>`。需要固定包名时，
+可直接设置 `packages.kernel_packages`。
 
 ## 支持范围
 
@@ -161,19 +163,20 @@ sudo kau tui    # 别名
 
 菜单内置：
 
-- 检查更新、预览更新（dry-run）、立即安装
+- 检查更新、预览更新（不安装）、立即安装
 - 主菜单直接切换更新方式：`package`（发行版预编译包）或 `build`（源码编译）
 - 程序自更新（更新 `kau` 本身）
-- 状态、已安装内核、doctor 自检、日志查看
-- 启用 / 停用 systemd timer
+- 状态、已安装内核、环境自检、日志查看
+- 启用 / 停用 systemd 定时器
 - 编辑常用配置：update_method、channel、auto_update、auto_reboot、超时、工作目录、
   日志路径、PGP 校验、`config_source`、`localversion`、jobs、包管理器 / 内核包、
   initramfs / bootloader 等
 
 操作：方向键或 `j/k` 移动，`Enter` 选择，`Esc` / `q` 返回，主菜单按 `q` 退出。
 设置修改会立即写入 `/etc/kernel-autoupdater/config.ini`，并保留原有注释；写入后会
-重新加载配置校验，非法值会提示并恢复原文件。执行安装、检查等长任务时会临时退出
-curses，任务结束后按 Enter 返回菜单。
+重新加载配置校验，非法值会提示并恢复原文件。检查、安装、自检、状态、日志和程序
+自更新等动作的实时输出都会留在全屏 TUI 中；长输出可用方向键、PgUp/PgDn 滚动，
+任务完成后按 Enter / Esc / `q` 返回菜单。
 
 菜单需要真实 TTY（Linux 终端 / SSH）；非 TTY 或没有 `curses` 时会返回明确错误，
 仍可使用普通子命令。中文界面需要 UTF-8 locale；如出现乱码可先执行
@@ -239,7 +242,7 @@ clear_distro_keys = true
 [packages]
 # auto | apt | dnf
 manager = auto
-# auto 会选择 linux-image-generic / linux-image-<arch> 或 kernel
+# auto 会沿用当前内核 flavor，找不到时回退到发行版默认内核包
 kernel_packages = auto
 refresh_package_index = true
 min_free_gb = 2

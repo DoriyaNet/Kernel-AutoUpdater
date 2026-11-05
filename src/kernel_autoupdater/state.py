@@ -76,12 +76,12 @@ class StateStore:
             )
             try:
                 os.replace(str(self.path), str(backup))
-                LOGGER.warning("corrupt state moved to %s: %s", backup, exc)
+                LOGGER.warning("状态文件已损坏，已移动到 %s: %s", backup, exc)
             except OSError:
-                LOGGER.warning("cannot read state %s: %s", self.path, exc)
+                LOGGER.warning("无法读取状态文件 %s: %s", self.path, exc)
             return State()
         if not isinstance(payload, dict):
-            LOGGER.warning("state file %s is not an object; ignoring", self.path)
+            LOGGER.warning("状态文件 %s 不是有效对象，已忽略", self.path)
             return State()
 
         installed = []

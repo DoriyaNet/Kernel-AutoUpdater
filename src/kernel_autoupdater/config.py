@@ -32,23 +32,23 @@ def _as_bool(value: str, key: str) -> bool:
         return True
     if normalized in ("0", "false", "no", "off"):
         return False
-    raise ConfigError("{} must be a boolean, got {!r}".format(key, value))
+    raise ConfigError("{} 必须是布尔值，当前为 {!r}".format(key, value))
 
 
 def _as_int(value: str, key: str, minimum: int = 0) -> int:
     try:
         number = int(value.strip())
     except ValueError as exc:
-        raise ConfigError("{} must be an integer, got {!r}".format(key, value)) from exc
+        raise ConfigError("{} 必须是整数，当前为 {!r}".format(key, value)) from exc
     if number < minimum:
-        raise ConfigError("{} must be >= {}".format(key, minimum))
+        raise ConfigError("{} 必须大于或等于 {}".format(key, minimum))
     return number
 
 
 def _as_path(value: str, key: str) -> Path:
     expanded = os.path.expandvars(os.path.expanduser(value.strip()))
     if not expanded:
-        raise ConfigError("{} must not be empty".format(key))
+        raise ConfigError("{} 不能为空".format(key))
     return Path(expanded)
 
 
@@ -92,7 +92,7 @@ class Config:
         config.source_path = resolved
         if not resolved.exists():
             if explicit:
-                raise ConfigError("config file not found: {}".format(resolved))
+                raise ConfigError("找不到配置文件: {}".format(resolved))
             return config
 
         parser = configparser.ConfigParser(interpolation=None)
@@ -100,7 +100,7 @@ class Config:
             with resolved.open("r", encoding="utf-8") as handle:
                 parser.read_file(handle)
         except (OSError, configparser.Error) as exc:
-            raise ConfigError("cannot read {}: {}".format(resolved, exc)) from exc
+            raise ConfigError("无法读取 {}: {}".format(resolved, exc)) from exc
 
         config._apply(parser)
         return config
@@ -120,14 +120,14 @@ class Config:
         ).strip().lower()
         if self.update_method not in ("build", "package"):
             raise ConfigError(
-                "updater.update_method must be build or package, got {!r}".format(
+                "updater.update_method 必须是 build 或 package，当前为 {!r}".format(
                     self.update_method
                 )
             )
 
         self.feed_url = self._get(parser, "updater", "feed_url", self.feed_url).strip()
         if not self.feed_url:
-            raise ConfigError("updater.feed_url must not be empty")
+            raise ConfigError("updater.feed_url 不能为空")
         self.feed_timeout = _as_int(
             self._get(parser, "updater", "feed_timeout", str(self.feed_timeout)),
             "updater.feed_timeout",
@@ -188,12 +188,12 @@ class Config:
             parser, "build", "config_source", self.config_source
         ).strip()
         if not self.config_source:
-            raise ConfigError("build.config_source must not be empty")
+            raise ConfigError("build.config_source 不能为空")
         self.localversion = self._get(
             parser, "build", "localversion", self.localversion
         ).strip()
         if any(char in self.localversion for char in "\r\n"):
-            raise ConfigError("build.localversion must be a single line")
+            raise ConfigError("build.localversion 必须是单行文本")
         self.jobs = _as_int(
             self._get(parser, "build", "jobs", str(self.jobs)), "build.jobs"
         )
@@ -215,7 +215,7 @@ class Config:
         ).strip().lower()
         if self.package_manager not in ("auto", "apt", "dnf"):
             raise ConfigError(
-                "packages.manager must be auto, apt or dnf, got {!r}".format(
+                "packages.manager 必须是 auto、apt 或 dnf，当前为 {!r}".format(
                     self.package_manager
                 )
             )
@@ -223,9 +223,9 @@ class Config:
             parser, "packages", "kernel_packages", self.kernel_packages
         ).strip()
         if not self.kernel_packages:
-            raise ConfigError("packages.kernel_packages must not be empty")
+            raise ConfigError("packages.kernel_packages 不能为空")
         if any(char in self.kernel_packages for char in "\r\n"):
-            raise ConfigError("packages.kernel_packages must be a single line")
+            raise ConfigError("packages.kernel_packages 必须是单行文本")
         if self.kernel_packages.lower() != "auto":
             names = [
                 item
@@ -233,7 +233,7 @@ class Config:
                 if item
             ]
             if not names:
-                raise ConfigError("packages.kernel_packages must not be empty")
+                raise ConfigError("packages.kernel_packages 不能为空")
             invalid = [
                 item
                 for item in names
@@ -241,7 +241,7 @@ class Config:
             ]
             if invalid:
                 raise ConfigError(
-                    "packages.kernel_packages contains invalid names: {}".format(
+                    "packages.kernel_packages 包含无效名称: {}".format(
                         ", ".join(invalid)
                     )
                 )
@@ -280,7 +280,7 @@ class Config:
         known_sections = {"updater", "source", "build", "packages", "install"}
         for section in parser.sections():
             if section not in known_sections:
-                LOGGER.warning("ignoring unknown config section [%s]", section)
+                LOGGER.warning("忽略未知配置节 [%s]", section)
 
     @property
     def state_path(self) -> Path:

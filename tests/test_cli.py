@@ -15,6 +15,7 @@ from kernel_autoupdater.cli import (
     cmd_menu,
     cmd_status,
     main,
+    _menu_self_update,
 )
 from kernel_autoupdater.config import Config
 from kernel_autoupdater.kernelorg import KernelRelease, _parse_feed
@@ -272,6 +273,22 @@ class CliTests(unittest.TestCase):
             actions = run.call_args[0][2]
             self.assertIn("self_update", actions)
             self.assertIn("update", actions)
+            self.assertIn("update_reboot", actions)
+
+    def test_menu_self_update_skips_cli_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Config.load(make_config(temp), explicit=True)
+            with patch(
+                "kernel_autoupdater.cli.run_self_update", return_value=0
+            ) as run:
+                code = _menu_self_update(config)
+            self.assertEqual(code, 0)
+            run.assert_called_once_with(
+                ref="master",
+                check_only=False,
+                force=False,
+                assume_yes=True,
+            )
 
 
 if __name__ == "__main__":

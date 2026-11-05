@@ -108,8 +108,9 @@ def check_for_update(
         current_version = KernelVersion.parse(current_kernel)
     except VersionError as exc:
         raise UpdateError(
-            "cannot parse running kernel release {!r}; this tool is intended "
-            "for Linux hosts".format(current_kernel)
+            "无法解析当前内核版本 {!r}；此工具只能用于 Linux 主机".format(
+                current_kernel
+            )
         ) from exc
 
     installed_match = None
@@ -152,14 +153,17 @@ def check_package_update(
     """Check a distro repository for a prebuilt kernel update."""
 
     runner = runner or CommandRunner()
-    backend = backend or distro_packages.build_backend(config, runner)
     current_kernel = current or running_kernel()
+    backend = backend or distro_packages.build_backend(
+        config, runner, running_release=current_kernel
+    )
     try:
         current_version = KernelVersion.parse(current_kernel)
     except VersionError as exc:
         raise UpdateError(
-            "cannot parse running kernel release {!r}; this tool is intended "
-            "for Linux hosts".format(current_kernel)
+            "无法解析当前内核版本 {!r}；此工具只能用于 Linux 主机".format(
+                current_kernel
+            )
         ) from exc
 
     if refresh and not runner.dry_run:
@@ -315,7 +319,7 @@ class Updater:
                 except (ReleaseNotFoundError, VersionError) as exc:
                     raise UpdateError(str(exc)) from exc
                 LOGGER.info(
-                    "version %s is not listed in the feed; using %s",
+                    "版本 %s 不在发布信息中，改用 %s",
                     canonical,
                     release.source,
                 )
@@ -339,8 +343,9 @@ class Updater:
             current_version = KernelVersion.parse(self.current)
         except VersionError as exc:
             raise UpdateError(
-                "cannot parse running kernel release {!r}; this tool is "
-                "intended for Linux hosts".format(self.current)
+                "无法解析当前内核版本 {!r}；此工具只能用于 Linux 主机".format(
+                    self.current
+                )
             ) from exc
         target_version = release.parsed_version
         installed_match = self._installed_match(release)
@@ -351,7 +356,7 @@ class Updater:
             and boot_image_exists(installed_match.release)
         ):
             LOGGER.info(
-                "kernel %s (%s) is already installed; reboot to activate it",
+                "内核 %s (%s) 已安装，请重启以启用",
                 release.version,
                 installed_match.release,
             )
@@ -361,7 +366,7 @@ class Updater:
 
         if target_version <= current_version and not options.force:
             LOGGER.info(
-                "kernel is already up to date (running %s, latest %s)",
+                "内核已是最新版本（运行 %s，最新 %s）",
                 self.current,
                 release.version,
             )
@@ -404,11 +409,14 @@ class Updater:
             current_version = KernelVersion.parse(self.current)
         except VersionError as exc:
             raise UpdateError(
-                "cannot parse running kernel release {!r}; this tool is "
-                "intended for Linux hosts".format(self.current)
+                "无法解析当前内核版本 {!r}；此工具只能用于 Linux 主机".format(
+                    self.current
+                )
             ) from exc
 
-        backend = distro_packages.build_backend(self.config, self.runner)
+        backend = distro_packages.build_backend(
+            self.config, self.runner, running_release=self.current
+        )
 
         if options.dry_run:
             update = backend.inspect(self.current)
@@ -423,7 +431,7 @@ class Updater:
         update = backend.inspect(self.current)
         release = self._package_release(update)
         LOGGER.info(
-            "preflight OK: package %s -> %s (%s, running %s)",
+            "预检通过：软件包 %s -> %s（%s，运行内核 %s）",
             update.installed_version or "none",
             update.candidate_version,
             backend.describe(),
@@ -435,7 +443,7 @@ class Updater:
                 update
             ) or update.installed_version
             LOGGER.info(
-                "kernel package %s is already installed; reboot to activate it",
+                "内核包 %s 已安装，请重启以启用",
                 update.candidate_version,
             )
             self.state.record_check(update.candidate_version)
@@ -444,8 +452,7 @@ class Updater:
 
         if not update.update_available and not options.force:
             LOGGER.info(
-                "kernel package is already up to date (installed %s, "
-                "candidate %s)",
+                "内核包已是最新版本（已安装 %s，候选 %s）",
                 update.installed_version or "none",
                 update.candidate_version,
             )
@@ -474,24 +481,23 @@ class Updater:
         self.config.work_dir.mkdir(parents=True, exist_ok=True)
         before = set(installed_module_releases())
 
-        self._step(1, 4, "Download and install prebuilt packages")
+        self._step(1, 4, "下载并安装预编译内核包")
         backend.install()
         kernel_release = self._detect_package_release(
             update, before, set(installed_module_releases())
         )
 
-        self._step(2, 4, "Verify installed kernel")
+        self._step(2, 4, "验证内核安装")
         self._verify_install(kernel_release)
 
-        self._step(3, 4, "Refresh initramfs and bootloader")
+        self._step(3, 4, "刷新 initramfs 和引导项")
         if self.config.update_initramfs or self.config.update_bootloader:
             LOGGER.info(
-                "the %s package post-install scripts handle initramfs and "
-                "bootloader updates",
+                "%s 软件包的安装后脚本会处理 initramfs 和引导项更新",
                 backend.name,
             )
 
-        self._step(4, 4, "Record state")
+        self._step(4, 4, "记录状态")
         self.state.record_check(update.candidate_version)
         self.state.record_install(
             update.candidate_version,
@@ -505,7 +511,7 @@ class Updater:
             self._schedule_reboot(kernel_release)
 
         LOGGER.info(
-            "kernel package %s installed (%s); running kernel remains %s",
+            "内核包 %s 已安装（%s）；当前运行内核仍为 %s",
             update.candidate_version,
             kernel_release,
             self.current,
@@ -560,26 +566,26 @@ class Updater:
             return max(parsed)[1]
 
         LOGGER.warning(
-            "cannot determine the installed kernel release from /lib/modules; "
-            "recording package version %s instead",
+            "无法从 /lib/modules 判断已安装的内核版本；"
+            "改为记录软件包版本 %s",
             update.candidate_version,
         )
         return update.kernel_version
 
     def _preflight_package(self) -> None:
         if not is_linux():
-            raise UpdateError("kernel updates are only supported on Linux")
+            raise UpdateError("仅支持在 Linux 上更新内核")
         geteuid = getattr(os, "geteuid", None)
         if geteuid is not None and geteuid() != 0:
-            raise UpdateError("kernel updates must run as root (try sudo)")
+            raise UpdateError("更新内核需要 root 权限，请使用 sudo 运行")
 
         available = free_gb(self.config.work_dir)
         if available < self.config.package_min_free_gb:
             raise UpdateError(
-                "only {:.1f} GiB free under {}; at least {} GiB is required "
-                "(packages.min_free_gb)".format(
-                    available,
+                "{} 只剩 {:.1f} GiB，至少需要 {} GiB "
+                "（packages.min_free_gb）".format(
                     self.config.work_dir,
+                    available,
                     self.config.package_min_free_gb,
                 )
             )
@@ -588,19 +594,17 @@ class Updater:
             boot_free = free_gb(boot)
             if boot_free < 0.5:
                 LOGGER.warning(
-                    "/boot has only %.0f MiB free; package installation may fail",
+                    "/boot 只剩 %.0f MiB，软件包安装可能失败",
                     boot_free * 1024,
                 )
         else:
             LOGGER.warning(
-                "/boot does not exist; the package may install without a "
-                "bootable kernel entry"
+                "/boot 不存在；软件包可能安装成功，但不会生成可启动引导项"
             )
         if secure_boot_enabled(self.runner) is True:
             LOGGER.info(
-                "Secure Boot is enabled; distro kernel packages are normally "
-                "signed by the distribution (package mode does not build an "
-                "unsigned kernel)"
+                "Secure Boot 已启用；发行版内核包通常带签名，"
+                "package 模式不编译未签名内核"
             )
 
     def _confirm_package(
@@ -611,22 +615,22 @@ class Updater:
     ) -> None:
         if options.assume_yes:
             return
-        LOGGER.info("current kernel : %s", self.current)
-        LOGGER.info("method         : prebuilt packages (%s)", backend.name)
-        LOGGER.info("packages       : %s", ", ".join(backend.packages))
-        LOGGER.info("installed      : %s", update.installed_version or "none")
-        LOGGER.info("candidate      : %s", update.candidate_version)
-        LOGGER.info("kernel base    : %s", update.kernel_version)
-        LOGGER.info("build          : skipped")
-        LOGGER.info("reboot         : %s", "yes" if options.reboot else "no")
+        LOGGER.info("当前内核 : %s", self.current)
+        LOGGER.info("更新方式 : 预编译包 (%s)", backend.name)
+        LOGGER.info("内核包   : %s", ", ".join(backend.packages))
+        LOGGER.info("已安装   : %s", update.installed_version or "无")
+        LOGGER.info("候选版本 : %s", update.candidate_version)
+        LOGGER.info("内核基线 : %s", update.kernel_version)
+        LOGGER.info("本地编译 : 跳过")
+        LOGGER.info("安装后重启: %s", "是" if options.reboot else "否")
         if not sys.stdin.isatty():
-            raise UpdateError("confirmation required; rerun with --yes")
+            raise UpdateError("需要确认；请重新运行并加 --yes")
         try:
-            answer = input("Install these kernel packages? [y/N] ").strip().lower()
+            answer = input("安装这些内核包？[y/N] ").strip().lower()
         except EOFError:
             answer = ""
         if answer not in ("y", "yes"):
-            raise UpdateError("aborted by user")
+            raise UpdateError("已由用户取消")
 
     def _print_package_plan(
         self,
@@ -634,21 +638,21 @@ class Updater:
         update: distro_packages.PackageUpdate,
         options: UpdateOptions,
     ) -> None:
-        LOGGER.info("dry-run plan")
-        LOGGER.info("  current kernel : %s", self.current)
-        LOGGER.info("  method         : package (%s)", backend.name)
-        LOGGER.info("  packages       : %s", ", ".join(backend.packages))
-        LOGGER.info("  installed      : %s", update.installed_version or "none")
-        LOGGER.info("  candidate      : %s", update.candidate_version)
-        LOGGER.info("  kernel base    : %s", update.kernel_version)
+        LOGGER.info("试运行计划")
+        LOGGER.info("  当前内核 : %s", self.current)
+        LOGGER.info("  更新方式 : package (%s)", backend.name)
+        LOGGER.info("  内核包   : %s", ", ".join(backend.packages))
+        LOGGER.info("  已安装   : %s", update.installed_version or "无")
+        LOGGER.info("  候选版本 : %s", update.candidate_version)
+        LOGGER.info("  内核基线 : %s", update.kernel_version)
         LOGGER.info(
-            "  refresh index  : %s",
-            "yes" if self.config.refresh_package_index else "no",
+            "  刷新索引 : %s",
+            "是" if self.config.refresh_package_index else "否",
         )
-        LOGGER.info("  install        : %s", " ".join(backend.install_command()))
-        LOGGER.info("  source build   : skipped")
-        LOGGER.info("  config/patches : not used by package mode")
-        LOGGER.info("  reboot         : %s", "yes" if options.reboot else "no")
+        LOGGER.info("  安装命令 : %s", " ".join(backend.install_command()))
+        LOGGER.info("  源码编译 : 跳过")
+        LOGGER.info("  配置/补丁: package 模式不使用")
+        LOGGER.info("  安装后重启: %s", "是" if options.reboot else "否")
 
     def _execute_locked(
         self, release: KernelRelease, options: UpdateOptions
@@ -657,30 +661,30 @@ class Updater:
         self.config.downloads_dir.mkdir(parents=True, exist_ok=True)
         self.config.build_dir.mkdir(parents=True, exist_ok=True)
 
-        self._step(1, 8, "Download and verify")
+        self._step(1, 8, "下载并校验源码")
         archive = self._download_source(release)
 
-        self._step(2, 8, "Extract source")
+        self._step(2, 8, "解压源码")
         source_dir = self._extract_source(archive, release, options)
 
-        self._step(3, 8, "Apply local patches")
+        self._step(3, 8, "应用本地补丁")
         self._apply_patches(source_dir)
 
-        self._step(4, 8, "Synchronize kernel config")
+        self._step(4, 8, "同步内核配置")
         self._configure(source_dir, options)
 
-        self._step(5, 8, "Build kernel and modules")
+        self._step(5, 8, "编译内核和模块")
         jobs = options.jobs or self.config.jobs or cpu_count()
         self.runner.run(
             ["make", "-j{}".format(jobs), "all"], cwd=source_dir
         )
 
-        self._step(6, 8, "Install kernel and modules")
+        self._step(6, 8, "安装内核和模块")
         kernel_release = self._kernel_release(source_dir)
         self.runner.run(["make", "modules_install"], cwd=source_dir)
         self.runner.run(["make", "install"], cwd=source_dir)
 
-        self._step(7, 8, "Refresh initramfs and bootloader")
+        self._step(7, 8, "刷新 initramfs 和引导项")
         if self.runner.which("depmod"):
             self.runner.run(["depmod", "-a", kernel_release], check=False)
         self._update_initramfs(kernel_release)
@@ -688,10 +692,10 @@ class Updater:
         self._verify_install(kernel_release)
 
         if not (options.keep_build or self.config.keep_build_dir):
-            LOGGER.info("removing build tree %s", source_dir)
+            LOGGER.info("正在删除编译目录 %s", source_dir)
             shutil.rmtree(str(source_dir), ignore_errors=True)
 
-        self._step(8, 8, "Record state")
+        self._step(8, 8, "记录状态")
         self.state.record_check(release.version)
         self.state.record_install(
             release.version, kernel_release, release.source, self.current
@@ -702,7 +706,7 @@ class Updater:
             self._schedule_reboot(kernel_release)
 
         LOGGER.info(
-            "kernel %s (%s) installed successfully; running kernel remains %s",
+            "内核 %s (%s) 安装成功；当前运行内核仍为 %s",
             release.version,
             kernel_release,
             self.current,
@@ -712,7 +716,7 @@ class Updater:
     def _download_source(self, release: KernelRelease) -> Path:
         filename = posixpath.basename(urlparse(release.source).path)
         if not filename:
-            raise UpdateError("source URL has no filename: {}".format(release.source))
+            raise UpdateError("源码地址中没有文件名: {}".format(release.source))
 
         checksum_url = release.checksums_url
         expected = None
@@ -720,14 +724,14 @@ class Updater:
             expected = self._fetch_checksum(checksum_url, filename, release.version)
         elif not self.config.allow_unverified:
             raise UpdateError(
-                "no SHA-256 checksum is available for {}; refusing to build an "
-                "unverified tarball. Set allow_unverified = true only if you "
-                "accept that risk.".format(release.source)
+                "{} 没有可用的 SHA-256 校验和，已拒绝编译未校验的源码包。"
+                "只有在你接受风险时才应设置 allow_unverified = true。".format(
+                    release.source
+                )
             )
         else:
             LOGGER.warning(
-                "no checksum available for %s; continuing because "
-                "allow_unverified is enabled",
+                "%s 没有可用校验和；因已启用 allow_unverified，继续执行",
                 release.source,
             )
 
@@ -751,9 +755,9 @@ class Updater:
 
         if not self.config.verify_pgp:
             LOGGER.warning(
-                "PGP verification is disabled; trusting HTTPS plus the SHA-256 "
-                "checksum. Enable source.verify_pgp to verify the kernel.org "
-                ".tar.sign signature."
+                "未启用 PGP 校验，仅信任 HTTPS 和 SHA-256 校验和。"
+                "如需验证 kernel.org 的 .tar.sign 签名，请启用 "
+                "source.verify_pgp。"
             )
 
         text = checksum_file.read_text(encoding="utf-8", errors="replace")
@@ -761,7 +765,7 @@ class Updater:
         expected = checksums.get(filename)
         if not expected:
             raise UpdateError(
-                "{} does not list {}".format(url, filename)
+                "{} 中没有列出 {}".format(url, filename)
             )
         return expected
 
@@ -771,18 +775,17 @@ class Updater:
         gpg = self.runner.which("gpg")
         if not gpg:
             raise UpdateError(
-                "source.verify_pgp is enabled but gpg is not installed"
+                "已启用 source.verify_pgp，但系统没有安装 gpg"
             )
         keyring = self.config.pgp_keyring
         if not keyring.is_file():
             raise UpdateError(
-                "source.verify_pgp is enabled but the keyring does not exist: {}"
-                .format(keyring)
+                "已启用 source.verify_pgp，但公钥环不存在: {}".format(keyring)
             )
         if not release.pgp:
             raise UpdateError(
-                "release {} has no PGP signature; use a stable/longterm release "
-                "or disable source.verify_pgp".format(release.version)
+                "版本 {} 没有 PGP 签名；请使用 stable/longterm 版本，"
+                "或关闭 source.verify_pgp".format(release.version)
             )
 
         signature_file = self.config.downloads_dir / posixpath.basename(
@@ -794,7 +797,7 @@ class Updater:
             release.pgp, signature_file, timeout=self.config.download_timeout
         )
         LOGGER.info(
-            "verifying PGP signature %s (streaming decompressed source)",
+            "正在校验 PGP 签名 %s（流式读取解压后的源码）",
             signature_file.name,
         )
 
@@ -848,11 +851,12 @@ class Updater:
         if returncode != 0:
             detail = stderr.decode("utf-8", errors="replace").strip()
             raise UpdateError(
-                "PGP signature verification failed for {}: {}".format(
-                    release.version, detail or "gpg exited with {}".format(returncode)
+                "版本 {} 的 PGP 签名校验失败: {}".format(
+                    release.version,
+                    detail or "gpg 退出码 {}".format(returncode),
                 )
             )
-        LOGGER.info("PGP signature verified for %s", release.version)
+        LOGGER.info("版本 %s 的 PGP 签名校验通过", release.version)
 
     @staticmethod
     def _compressed_opener(archive: Path):
@@ -866,32 +870,32 @@ class Updater:
         if name.endswith(".tar"):
             return open
         raise UpdateError(
-            "cannot verify signature for unsupported archive type: {}".format(archive)
+            "无法校验不支持的源码包格式: {}".format(archive)
         )
 
     def _extract_source(
         self, archive: Path, release: KernelRelease, options: UpdateOptions
     ) -> Path:
-        LOGGER.debug("preparing source tree for %s", release.version)
+        LOGGER.debug("正在准备 %s 的源码目录", release.version)
         source_dir = self.config.build_dir / self._archive_top_dir(archive)
         if source_dir.exists():
             if options.keep_build:
-                LOGGER.info("reusing existing build directory %s", source_dir)
+                LOGGER.info("复用已有编译目录 %s", source_dir)
                 if not (source_dir / "Makefile").exists():
                     raise UpdateError(
-                        "build directory is incomplete: {}".format(source_dir)
+                        "编译目录不完整: {}".format(source_dir)
                     )
                 return source_dir
-            LOGGER.info("removing previous build directory %s", source_dir)
+            LOGGER.info("正在删除旧编译目录 %s", source_dir)
             shutil.rmtree(str(source_dir))
 
         self._safe_extract(archive, self.config.build_dir)
         if not source_dir.is_dir():
             raise UpdateError(
-                "archive did not create expected directory {}".format(source_dir)
+                "源码包解压后没有生成预期目录 {}".format(source_dir)
             )
         if not (source_dir / "Makefile").exists():
-            raise UpdateError("{} does not look like a kernel source tree".format(source_dir))
+            raise UpdateError("{} 不像内核源码目录".format(source_dir))
         return source_dir
 
     @staticmethod
@@ -909,8 +913,8 @@ class Updater:
                 if fallback:
                     return fallback
         except (OSError, tarfile.TarError) as exc:
-            raise UpdateError("cannot read archive {}: {}".format(archive, exc)) from exc
-        raise UpdateError("archive {} is empty".format(archive))
+            raise UpdateError("无法读取源码包 {}: {}".format(archive, exc)) from exc
+        raise UpdateError("源码包 {} 是空的".format(archive))
 
     @staticmethod
     def _safe_extract(archive: Path, destination: Path) -> None:
@@ -922,15 +926,14 @@ class Updater:
                 target = (destination / member.name).resolve()
                 if base not in target.parents and target != base:
                     raise UpdateError(
-                        "refusing to extract path outside build directory: {}"
-                        .format(member.name)
+                        "拒绝解压到编译目录之外的路径: {}".format(member.name)
                     )
                 if member.issym() or member.islnk():
                     link_base = target.parent if member.issym() else base
                     link_target = (link_base / member.linkname).resolve()
                     if base not in link_target.parents and link_target != base:
                         raise UpdateError(
-                            "refusing to extract unsafe link: {}".format(member.name)
+                            "拒绝解压不安全的链接: {}".format(member.name)
                         )
             if hasattr(tarfile, "data_filter"):
                 tar.extractall(str(destination), filter="data")
@@ -940,22 +943,22 @@ class Updater:
     def _apply_patches(self, source_dir: Path) -> None:
         patch_dir = self.config.patches_dir
         if not patch_dir.is_dir():
-            LOGGER.debug("patch directory %s does not exist", patch_dir)
+            LOGGER.debug("补丁目录 %s 不存在", patch_dir)
             return
         patches = sorted(
             list(patch_dir.glob("*.patch")) + list(patch_dir.glob("*.diff"))
         )
         if not patches:
-            LOGGER.info("no local patches found in %s", patch_dir)
+            LOGGER.info("%s 中没有本地补丁", patch_dir)
             return
         marker = source_dir / ".kau-patches-applied"
         if marker.exists():
-            LOGGER.info("local patches were already applied to this build tree")
+            LOGGER.info("当前编译目录已应用本地补丁")
             return
         if not self.runner.which("patch"):
-            raise UpdateError("local patches exist but the patch command is missing")
+            raise UpdateError("存在本地补丁，但系统没有 patch 命令")
         for patch in patches:
-            LOGGER.info("applying %s", patch.name)
+            LOGGER.info("正在应用补丁 %s", patch.name)
             self.runner.run(
                 [
                     "patch",
@@ -973,17 +976,17 @@ class Updater:
     def _configure(self, source_dir: Path, options: UpdateOptions) -> None:
         spec = "defconfig" if options.defconfig else self.config.config_source
         if spec == "defconfig":
-            LOGGER.info("using make defconfig; this may omit drivers for this host")
+            LOGGER.info("使用 make defconfig；可能会缺少本机所需的驱动")
             self.runner.run(["make", "defconfig"], cwd=source_dir)
         else:
             config_file = source_dir / ".config"
             source = write_kernel_config(spec, self.current, config_file)
-            LOGGER.info("using kernel config from %s", source)
+            LOGGER.info("使用内核配置 %s", source)
             self.runner.run(["make", "olddefconfig"], cwd=source_dir)
 
         scripts_config = source_dir / "scripts" / "config"
         if not scripts_config.exists():
-            raise UpdateError("kernel source is missing scripts/config")
+            raise UpdateError("内核源码缺少 scripts/config")
         self.runner.run(
             [
                 "/bin/sh",
@@ -1013,13 +1016,13 @@ class Updater:
         kernel_release = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
         if not kernel_release or re.search(r"\s", kernel_release):
             raise UpdateError(
-                "could not determine the built kernel release from make kernelrelease"
+                "无法通过 make kernelrelease 确定编译出的内核版本"
             )
         return kernel_release
 
     def _update_initramfs(self, kernel_release: str) -> None:
         if not self.config.update_initramfs:
-            LOGGER.info("initramfs refresh disabled by configuration")
+            LOGGER.info("配置已禁用 initramfs 刷新")
             return
         if self.runner.which("update-initramfs"):
             mode = "-u" if initramfs_exists(kernel_release) else "-c"
@@ -1028,7 +1031,7 @@ class Updater:
         if self.runner.which("dracut"):
             if initramfs_exists(kernel_release):
                 LOGGER.info(
-                    "initramfs for %s already exists (created by installkernel)",
+                    "%s 的 initramfs 已存在（由 installkernel 创建）",
                     kernel_release,
                 )
                 return
@@ -1037,18 +1040,18 @@ class Updater:
             return
         if self.runner.which("mkinitcpio"):
             LOGGER.warning(
-                "mkinitcpio detected but no preset was created for %s; add a "
-                "preset (or run mkinitcpio with the right config) before rebooting",
+                "检测到 mkinitcpio，但 %s 没有对应的 preset；"
+                "请先创建 preset（或使用正确配置运行 mkinitcpio）再重启",
                 kernel_release,
             )
             return
         LOGGER.warning(
-            "no supported initramfs tool found; verify /boot before rebooting"
+            "没有找到受支持的 initramfs 工具；重启前请检查 /boot"
         )
 
     def _update_bootloader(self) -> None:
         if not self.config.update_bootloader:
-            LOGGER.info("bootloader refresh disabled by configuration")
+            LOGGER.info("配置已禁用引导项刷新")
             return
         if self.runner.which("update-grub"):
             self.runner.run(["update-grub"])
@@ -1066,13 +1069,11 @@ class Updater:
             return
         if self.runner.which("bootctl"):
             LOGGER.info(
-                "systemd-boot detected; kernel-install should have created a "
-                "boot entry automatically"
+                "检测到 systemd-boot；kernel-install 应已自动创建引导项"
             )
             return
         LOGGER.warning(
-            "no supported bootloader update command found; add the new kernel "
-            "to the bootloader manually before rebooting"
+            "没有找到受支持的引导更新命令；重启前请手动把新内核加入引导项"
         )
 
     def _verify_install(self, kernel_release: str) -> None:
@@ -1082,28 +1083,27 @@ class Updater:
         if not modules.is_dir():
             if boot_image_exists(kernel_release):
                 LOGGER.warning(
-                    "no module directory for %s; this is expected for a "
-                    "monolithic kernel",
+                    "%s 没有模块目录；单体内核出现这种情况是正常的",
                     kernel_release,
                 )
             else:
                 raise UpdateError(
-                    "modules were not installed under /lib/modules/{}".format(
+                    "模块没有安装到 /lib/modules/{}".format(
                         kernel_release
                     )
                 )
         if not boot_image_exists(kernel_release):
             LOGGER.warning(
-                "could not find a boot image for %s under /boot; check that "
-                "installkernel/kernel-install created a boot entry",
+                "在 /boot 下找不到 %s 的启动镜像；"
+                "请确认 installkernel/kernel-install 已创建引导项",
                 kernel_release,
             )
         elif self.runner.which("bootctl"):
             entries = list(Path("/boot/loader/entries").glob("*{}*.conf".format(kernel_release)))
             if entries:
-                LOGGER.info("systemd-boot entry: %s", entries[0].name)
+                LOGGER.info("systemd-boot 引导项: %s", entries[0].name)
         if modules.is_dir():
-            LOGGER.info("installed modules at %s", modules)
+            LOGGER.info("模块已安装到 %s", modules)
 
     def _schedule_reboot(self, kernel_release: str) -> None:
         delay = self.config.reboot_delay_minutes
@@ -1112,43 +1112,45 @@ class Updater:
                 "shutdown",
                 "-r",
                 "+{}".format(delay),
-                "kernel-autoupdater: reboot to activate {}".format(kernel_release),
+                "内核自动更新器：重启以启用 {}".format(kernel_release),
             ]
-            LOGGER.info("scheduling reboot in %d minute(s)", delay)
+            LOGGER.info("将在 %d 分钟后重启", delay)
         else:
             command = ["shutdown", "-r", "now"]
-            LOGGER.info("rebooting now")
+            LOGGER.info("正在立即重启")
         self.runner.run(command)
 
     def _preflight(self, release: KernelRelease, options: UpdateOptions) -> None:
         if not is_linux():
-            raise UpdateError("kernel updates are only supported on Linux")
+            raise UpdateError("仅支持在 Linux 上更新内核")
         geteuid = getattr(os, "geteuid", None)
         if geteuid is not None and geteuid() != 0:
-            raise UpdateError("kernel updates must run as root (try sudo)")
+            raise UpdateError("更新内核需要 root 权限，请使用 sudo 运行")
 
         if secure_boot_enabled(self.runner) is True and not options.force:
             raise UpdateError(
-                "UEFI Secure Boot is enabled and this tool installs an unsigned "
-                "kernel. Sign the kernel or disable Secure Boot, then rerun with "
-                "--force if you understand the risk."
+                "UEFI Secure Boot 已启用，而源码编译模式安装的是未签名内核。"
+                "请自行签名或关闭 Secure Boot；确认风险后可加 --force 继续。"
             )
 
         if not release.checksums_url and not self.config.allow_unverified:
             raise UpdateError(
-                "{} has no published SHA-256 checksum. Use a stable/longterm "
-                "release, or set allow_unverified = true if you accept the "
-                "risk.".format(release.version)
+                "{} 没有发布 SHA-256 校验和。请使用 stable/longterm 版本，"
+                "或在接受风险后设置 allow_unverified = true。".format(
+                    release.version
+                )
             )
         if self.config.verify_pgp and not self.config.pgp_keyring.is_file():
             raise UpdateError(
-                "source.verify_pgp is enabled but the keyring does not exist: {}"
-                .format(self.config.pgp_keyring)
+                "已启用 source.verify_pgp，但公钥环不存在: {}".format(
+                    self.config.pgp_keyring
+                )
             )
         if self.config.verify_pgp and not release.pgp:
             raise UpdateError(
-                "source.verify_pgp is enabled but {} has no .tar.sign "
-                "signature".format(release.version)
+                "已启用 source.verify_pgp，但 {} 没有 .tar.sign 签名".format(
+                    release.version
+                )
             )
 
         required = ["make", "bc", "flex", "bison", "perl", "tar"]
@@ -1161,9 +1163,9 @@ class Updater:
             missing.append("gpg")
         if missing:
             raise UpdateError(
-                "missing build dependency/binaries: {}. Install your distribution's "
-                "kernel build toolchain first (gcc, make, bc, flex, bison, perl, "
-                "libssl-dev/openssl-devel, dwarves/pahole, cpio).".format(
+                "缺少编译依赖/命令: {}。请先安装发行版的内核编译工具链"
+                "（gcc、make、bc、flex、bison、perl、libssl-dev/openssl-devel、"
+                "dwarves/pahole、cpio）。".format(
                     ", ".join(missing)
                 )
             )
@@ -1172,12 +1174,12 @@ class Updater:
             for tool in ("update-initramfs", "dracut", "mkinitcpio")
         ):
             LOGGER.warning(
-                "no supported initramfs tool found; the new kernel may not boot"
+                "没有找到受支持的 initramfs 工具，新内核可能无法启动"
             )
         for optional in ("pahole", "cpio"):
             if not self.runner.which(optional):
                 LOGGER.warning(
-                    "%s is missing; BTF or initramfs generation may fail",
+                    "缺少 %s，BTF 或 initramfs 生成可能失败",
                     optional,
                 )
 
@@ -1187,9 +1189,11 @@ class Updater:
         available = free_gb(self.config.work_dir)
         if available < self.config.min_free_gb:
             raise UpdateError(
-                "only {:.1f} GiB free under {}; at least {} GiB is required "
-                "(updater.min_free_gb)".format(
-                    available, self.config.work_dir, self.config.min_free_gb
+                "{} 只剩 {:.1f} GiB，至少需要 {} GiB（updater.min_free_gb）"
+                .format(
+                    self.config.work_dir,
+                    available,
+                    self.config.min_free_gb,
                 )
             )
 
@@ -1198,12 +1202,12 @@ class Updater:
             boot_free = free_gb(boot)
             if boot_free < 0.5:
                 LOGGER.warning(
-                    "/boot has only %.0f MiB free; installation may fail",
+                    "/boot 只剩 %.0f MiB，安装可能失败",
                     boot_free * 1024,
                 )
 
         LOGGER.info(
-            "preflight OK: updating %s -> %s (source: %s)",
+            "预检通过：%s -> %s（来源: %s）",
             self.current,
             release.version,
             release.moniker,
@@ -1228,47 +1232,47 @@ class Updater:
         if options.assume_yes:
             return
         jobs = options.jobs or self.config.jobs or cpu_count()
-        LOGGER.info("current kernel : %s", self.current)
-        LOGGER.info("target kernel  : %s (%s)", release.version, release.moniker)
-        LOGGER.info("source         : %s", release.source)
-        LOGGER.info("build jobs     : %s", jobs)
+        LOGGER.info("当前内核 : %s", self.current)
+        LOGGER.info("目标内核 : %s (%s)", release.version, release.moniker)
+        LOGGER.info("源码     : %s", release.source)
+        LOGGER.info("编译任务 : %s", jobs)
         LOGGER.info(
-            "reboot         : %s",
-            "yes" if options.reboot else "no",
+            "安装后重启: %s",
+            "是" if options.reboot else "否",
         )
         if not sys.stdin.isatty():
-            raise UpdateError("confirmation required; rerun with --yes")
+            raise UpdateError("需要确认；请重新运行并加 --yes")
         try:
-            answer = input("Build and install this kernel? [y/N] ").strip().lower()
+            answer = input("编译并安装这个内核？[y/N] ").strip().lower()
         except EOFError:
             answer = ""
         if answer not in ("y", "yes"):
-            raise UpdateError("aborted by user")
+            raise UpdateError("已由用户取消")
 
     def _print_plan(self, release: KernelRelease, options: UpdateOptions) -> None:
         jobs = options.jobs or self.config.jobs or cpu_count()
         spec = "defconfig" if options.defconfig else self.config.config_source
-        LOGGER.info("dry-run plan")
-        LOGGER.info("  current kernel : %s", self.current)
-        LOGGER.info("  target kernel  : %s (%s)", release.version, release.moniker)
-        LOGGER.info("  source         : %s", release.source)
+        LOGGER.info("试运行计划")
+        LOGGER.info("  当前内核 : %s", self.current)
+        LOGGER.info("  目标内核 : %s (%s)", release.version, release.moniker)
+        LOGGER.info("  源码     : %s", release.source)
         if release.checksums_url:
-            LOGGER.info("  checksums      : %s", release.checksums_url)
+            LOGGER.info("  校验和   : %s", release.checksums_url)
         else:
-            LOGGER.info("  checksums      : unavailable")
-        LOGGER.info("  config source  : %s", spec)
-        LOGGER.info("  local version  : %r", self.config.localversion)
-        LOGGER.info("  build dir      : %s/linux-*/", self.config.build_dir)
-        LOGGER.info("  patches dir    : %s", self.config.patches_dir)
-        LOGGER.info("  make           : make -j%d all", jobs)
-        LOGGER.info("  install        : make modules_install && make install")
+            LOGGER.info("  校验和   : 不可用")
+        LOGGER.info("  配置来源 : %s", spec)
+        LOGGER.info("  本地版本 : %r", self.config.localversion)
+        LOGGER.info("  编译目录 : %s/linux-*/", self.config.build_dir)
+        LOGGER.info("  补丁目录 : %s", self.config.patches_dir)
+        LOGGER.info("  编译命令 : make -j%d all", jobs)
+        LOGGER.info("  安装命令 : make modules_install && make install")
         LOGGER.info(
-            "  cleanup        : %s",
-            "keep build tree"
+            "  清理     : %s",
+            "保留编译目录"
             if (options.keep_build or self.config.keep_build_dir)
-            else "remove build tree after success",
+            else "成功后删除编译目录",
         )
-        LOGGER.info("  reboot         : %s", "yes" if options.reboot else "no")
+        LOGGER.info("  安装后重启: %s", "是" if options.reboot else "否")
 
     @staticmethod
     def _step(index: int, total: int, title: str) -> None:
@@ -1278,5 +1282,5 @@ class Updater:
         try:
             self.state_store.save(self.state)
         except OSError as exc:
-            LOGGER.warning("cannot save updater state: %s", exc)
+            LOGGER.warning("无法保存更新状态: %s", exc)
 

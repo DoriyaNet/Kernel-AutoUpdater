@@ -42,7 +42,7 @@ def setup_logging(
             root.addHandler(file_handler)
         except OSError as exc:
             logging.getLogger(__name__).debug(
-                "cannot open log file %s: %s", log_file, exc
+                "无法打开日志文件 %s: %s", log_file, exc
             )
 
 

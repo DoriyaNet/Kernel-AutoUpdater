@@ -47,7 +47,7 @@ clear_distro_keys = true
 [packages]
 # auto | apt | dnf
 manager = auto
-# auto picks linux-image-generic/linux-image-<arch> or kernel
+# auto follows the running kernel flavor, then falls back to the distro default
 kernel_packages = auto
 refresh_package_index = true
 min_free_gb = 2
@@ -69,7 +69,7 @@ _KEY_RE = re.compile(
 
 def _validate_identifier(kind: str, value: str) -> None:
     if not isinstance(value, str) or not _IDENTIFIER_RE.match(value):
-        raise ValueError("invalid {} name: {!r}".format(kind, value))
+        raise ValueError("无效的{}名称: {!r}".format(kind, value))
 
 
 def _normalize_newlines(text: str) -> str:
@@ -162,9 +162,9 @@ def set_value(text: str, section: str, key: str, value: str) -> str:
     _validate_identifier("section", section)
     _validate_identifier("key", key)
     if not isinstance(value, str):
-        raise ValueError("value must be a string")
+        raise ValueError("配置值必须是字符串")
     if "\n" in value or "\r" in value:
-        raise ValueError("value must be a single line")
+        raise ValueError("配置值必须是单行文本")
 
     normalized = _normalize_newlines(text)
     trailing_newline = normalized.endswith("\n")

@@ -52,7 +52,7 @@ class KernelRelease:
         KernelVersion.parse(version)
         source = data.get("source")
         if not source:
-            raise FeedError("release {} has no source URL".format(version))
+            raise FeedError("版本 {} 没有源码地址".format(version))
         released = data.get("released") or {}
         if isinstance(released, dict):
             released = released.get("isodate")
@@ -87,9 +87,9 @@ def _parse_feed(text: str) -> Feed:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise FeedError("release feed is not valid JSON: {}".format(exc)) from exc
+        raise FeedError("发布信息不是有效的 JSON: {}".format(exc)) from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("releases"), list):
-        raise FeedError("release feed does not contain a releases list")
+        raise FeedError("发布信息中没有 releases 列表")
 
     releases = []
     for item in payload["releases"]:
@@ -98,9 +98,9 @@ def _parse_feed(text: str) -> Feed:
         try:
             releases.append(KernelRelease.from_dict(item))
         except (FeedError, VersionError) as exc:
-            LOGGER.debug("ignoring malformed feed entry: %s", exc)
+            LOGGER.debug("忽略格式错误的发布信息: %s", exc)
     if not releases:
-        raise FeedError("release feed contains no usable releases")
+        raise FeedError("发布信息中没有可用版本")
 
     latest = payload.get("latest_stable")
     if isinstance(latest, dict):
@@ -119,7 +119,7 @@ def _read_cache(cache_path: Optional[Path]) -> Optional[Feed]:
         text = cache_path.read_text(encoding="utf-8")
         feed = _parse_feed(text)
     except (OSError, FeedError) as exc:
-        LOGGER.warning("cannot read release feed cache %s: %s", cache_path, exc)
+        LOGGER.warning("无法读取发布信息缓存 %s: %s", cache_path, exc)
         return None
     return Feed(
         releases=feed.releases,
@@ -138,7 +138,7 @@ def _write_cache(cache_path: Optional[Path], text: str) -> None:
         tmp_path.write_text(text, encoding="utf-8")
         os.replace(str(tmp_path), str(cache_path))
     except OSError as exc:
-        LOGGER.warning("cannot write release feed cache %s: %s", cache_path, exc)
+        LOGGER.warning("无法写入发布信息缓存 %s: %s", cache_path, exc)
 
 
 def fetch_feed(
@@ -151,8 +151,8 @@ def fetch_feed(
     if offline:
         cached = _read_cache(cache_path)
         if cached is None:
-            raise FeedError("offline mode requested but no feed cache is available")
-        LOGGER.info("using cached release feed (offline mode)")
+            raise FeedError("已请求离线模式，但没有可用的发布信息缓存")
+        LOGGER.info("使用缓存的发布信息（离线模式）")
         return cached
 
     request = Request(feed_url, headers={"User-Agent": USER_AGENT})
@@ -164,9 +164,9 @@ def fetch_feed(
     except Exception as exc:  # urllib raises several exception types
         cached = _read_cache(cache_path)
         if cached is not None:
-            LOGGER.warning("cannot fetch release feed (%s); using cached copy", exc)
+            LOGGER.warning("无法获取发布信息（%s），改用缓存", exc)
             return cached
-        raise FeedError("cannot fetch release feed {}: {}".format(feed_url, exc)) from exc
+        raise FeedError("无法获取发布信息 {}: {}".format(feed_url, exc)) from exc
 
     _write_cache(cache_path, text)
     return feed
@@ -191,7 +191,7 @@ def select_release(
             candidates.append(release)
     if not candidates:
         raise ReleaseNotFoundError(
-            "no release found for channel {}".format(channel)
+            "更新通道 {} 没有匹配的版本".format(channel)
         )
     return max(candidates, key=lambda item: item.parsed_version.sort_key)
 
@@ -214,7 +214,7 @@ def release_for_version(version: str, allow_rc: bool = False) -> KernelRelease:
     if parsed.rc is not None:
         if not allow_rc:
             raise ReleaseNotFoundError(
-                "release candidate {} is not in the release feed".format(version)
+                "候选版本 {} 不在发布信息中".format(version)
             )
         source = "https://git.kernel.org/torvalds/t/linux-{}.tar.gz".format(parsed.tag)
         return KernelRelease(
@@ -280,7 +280,7 @@ def fetch_text(url: str, timeout: int = 60) -> str:
             charset = response.headers.get_content_charset() or "utf-8"
             return response.read().decode(charset)
     except Exception as exc:
-        raise DownloadError("cannot download {}: {}".format(url, exc)) from exc
+        raise DownloadError("无法下载 {}: {}".format(url, exc)) from exc
 
 
 def sha256_file(path: Path) -> str:
@@ -304,9 +304,9 @@ def download(
         if expected_sha256:
             actual = sha256_file(destination)
             if actual.lower() == expected_sha256.lower():
-                LOGGER.info("using cached archive %s", destination)
+                LOGGER.info("使用已缓存的源码包 %s", destination)
                 return destination
-            LOGGER.warning("cached archive checksum mismatch; downloading again")
+            LOGGER.warning("缓存源码包校验和不匹配，重新下载")
         else:
             return destination
 
@@ -335,18 +335,18 @@ def download(
                         percent = int(downloaded * 100 / total)
                         if percent >= last_percent + 10:
                             LOGGER.info(
-                                "downloading %s: %d%%", destination.name, percent
+                                "正在下载 %s: %d%%", destination.name, percent
                             )
                             last_percent = percent
         actual = digest.hexdigest()
         if expected_sha256 and actual.lower() != expected_sha256.lower():
             raise DownloadError(
-                "SHA-256 mismatch for {}: expected {}, got {}".format(
+                "{} 的 SHA-256 不匹配：期望 {}，实际 {}".format(
                     destination.name, expected_sha256, actual
                 )
             )
         os.replace(str(partial), str(destination))
-        LOGGER.info("downloaded %s (%d bytes)", destination.name, downloaded)
+        LOGGER.info("已下载 %s（%d 字节）", destination.name, downloaded)
         return destination
     except DownloadError:
         if partial.exists():
@@ -355,7 +355,7 @@ def download(
     except Exception as exc:
         if partial.exists():
             partial.unlink()
-        raise DownloadError("cannot download {}: {}".format(url, exc)) from exc
+        raise DownloadError("无法下载 {}: {}".format(url, exc)) from exc
 
 
 def max_release(releases: Iterable[KernelRelease]) -> KernelRelease:

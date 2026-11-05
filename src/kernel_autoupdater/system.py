@@ -27,7 +27,7 @@ def running_kernel() -> str:
 def distro_name() -> str:
     path = Path("/etc/os-release")
     if not path.exists():
-        return "unknown"
+        return "未知"
     values = {}
     try:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -35,8 +35,8 @@ def distro_name() -> str:
                 key, value = line.split("=", 1)
                 values[key] = value.strip().strip('"')
     except OSError:
-        return "unknown"
-    return values.get("PRETTY_NAME") or values.get("ID") or "unknown"
+        return "未知"
+    return values.get("PRETTY_NAME") or values.get("ID") or "未知"
 
 
 def cpu_count() -> int:
@@ -78,15 +78,15 @@ def find_kernel_config(spec: str, running: str) -> Tuple[str, Optional[Path]]:
             except OSError:
                 continue
         raise SystemCheckError(
-            "cannot find the running kernel config; looked for /boot/config-{}, "
-            "/proc/config.gz and /lib/modules/{}/config. Set build.config_source "
-            "to defconfig or a config file explicitly.".format(running, running)
+            "找不到当前内核配置；已检查 /boot/config-{}、/proc/config.gz 和 "
+            "/lib/modules/{}/config。请把 build.config_source 设为 defconfig "
+            "或一个明确的配置文件路径。".format(running, running)
         )
 
     candidate = Path(os.path.expandvars(os.path.expanduser(spec)))
     if not candidate.is_file() or candidate.stat().st_size == 0:
         raise SystemCheckError(
-            "kernel config source does not exist or is empty: {}".format(candidate)
+            "内核配置来源不存在或为空: {}".format(candidate)
         )
     kind = "gzip" if candidate.name.endswith(".gz") else "file"
     return (kind, candidate)
@@ -106,7 +106,7 @@ def write_kernel_config(spec: str, running: str, destination: Path) -> str:
         shutil.copyfile(str(source), str(destination))
     if destination.stat().st_size < 1024:
         raise SystemCheckError(
-            "kernel config {} looks too small to be valid".format(source)
+            "内核配置 {} 太小，可能无效".format(source)
         )
     return str(source)
 

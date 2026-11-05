@@ -19,6 +19,32 @@ def _noop_actions():
 
 
 class MenuFallbackTests(unittest.TestCase):
+    def test_action_stream_splits_lines_and_flushes(self):
+        lines = []
+        stream = menu._ActionStream(lines.append)
+        stream.write("first\nsecond")
+        stream.flush()
+        self.assertEqual(lines, ["first", "second"])
+
+    def test_clean_output_removes_ansi(self):
+        self.assertEqual(menu._clean_output("\x1b[32mgreen\x1b[0m\r"), "green")
+
+    def test_wrap_output_lines_preserves_long_output(self):
+        wrapped = menu._wrap_output_lines(
+            ["install: " + "x" * 30], width=20
+        )
+        self.assertEqual("".join(wrapped), "install: " + "x" * 30)
+        self.assertTrue(
+            all(menu._display_width(line) <= 19 for line in wrapped)
+        )
+
+    def test_wrap_output_lines_counts_wide_characters(self):
+        wrapped = menu._wrap_output_lines(["内核更新" * 4], width=10)
+        self.assertEqual("".join(wrapped), "内核更新" * 4)
+        self.assertTrue(
+            all(menu._display_width(line) <= 9 for line in wrapped)
+        )
+
     def test_main_menu_shows_current_update_method(self):
         labels = menu._main_labels(Config(update_method="package"))
         self.assertIn("更新方式：package（切换）", labels)
@@ -34,7 +60,7 @@ class MenuFallbackTests(unittest.TestCase):
                 Config(), Path("config.ini"), _noop_actions(), "0.3.0"
             )
         self.assertEqual(code, 2)
-        self.assertIn("terminal", stderr.getvalue())
+        self.assertIn("真实终端", stderr.getvalue())
         self.assertNotIn("curses", menu.__dict__)
 
     def test_non_tty_stdin_returns_2(self):
@@ -83,7 +109,7 @@ class MenuFallbackTests(unittest.TestCase):
             )
 
         self.assertEqual(code, 2)
-        self.assertIn("unavailable", stderr.getvalue())
+        self.assertIn("不可用", stderr.getvalue())
 
 
 class MenuSaveTests(unittest.TestCase):

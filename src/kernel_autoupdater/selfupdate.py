@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 
 from kernel_autoupdater import __version__
 from kernel_autoupdater.kernelorg import USER_AGENT, DownloadError, download
+from kernel_autoupdater.runner import CommandRunner
 
 LOGGER = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ def run_self_update(
             sys.executable or "python3",
         )
         LOGGER.info("运行安装脚本以更新 kau ...")
-        result = subprocess.run(
+        result = CommandRunner().run(
             ["bash", str(installer)],
             env=env,
             check=False,

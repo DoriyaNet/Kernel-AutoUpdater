@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from kernel_autoupdater.config import Config
-from kernel_autoupdater.runner import CommandRunner
+from kernel_autoupdater.runner import CommandError, CommandRunner
 from kernel_autoupdater.versioning import KernelVersion, VersionError
 
 LOGGER = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class PackageUpdate:
 
     @property
     def description(self) -> str:
-        return "{} package repository ({})".format(
+        return "{} 软件包仓库（{}）".format(
             self.manager, ", ".join(self.packages)
         )
 
@@ -57,11 +57,11 @@ def parse_package_list(value: str) -> Tuple[str, ...]:
         item for item in re.split(r"[\s,]+", value.strip()) if item
     )
     if not packages:
-        raise PackageError("kernel package list must not be empty")
+        raise PackageError("内核包列表不能为空")
     invalid = [item for item in packages if not _PACKAGE_RE.match(item)]
     if invalid:
         raise PackageError(
-            "invalid kernel package name(s): {}".format(", ".join(invalid))
+            "内核包名称无效: {}".format(", ".join(invalid))
         )
     return packages
 
@@ -88,6 +88,7 @@ def _distro_ids(values: Dict[str, str]) -> str:
 
 
 def _debian_architecture(machine: str) -> str:
+    machine = machine.lower()
     return {
         "x86_64": "amd64",
         "aarch64": "arm64",
@@ -100,16 +101,43 @@ def _debian_architecture(machine: str) -> str:
     }.get(machine, machine)
 
 
+def _apt_flavor_from_release(release: str) -> Optional[str]:
+    """Return the distro kernel flavor encoded in ``uname -r``."""
+
+    value = (release or "").strip()
+    if not value or "-" not in value:
+        return None
+    parts = value.split("-")
+    suffix = parts[1:]
+    if suffix and re.match(r"^\d", suffix[0]):
+        suffix = suffix[1:]
+    if not suffix:
+        return None
+    flavor = "-".join(suffix).strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.+_-]*", flavor):
+        return None
+    if flavor in ("custom", "kau", "microsoft"):
+        return None
+    return flavor
+
+
 def default_packages(
     manager: str,
     os_release: Optional[Dict[str, str]] = None,
     machine: Optional[str] = None,
+    running_release: Optional[str] = None,
 ) -> Tuple[str, ...]:
     values = os_release if os_release is not None else _read_os_release()
     ids = _distro_ids(values)
     arch = _debian_architecture(machine or platform.machine())
 
     if manager == "apt":
+        flavor = _apt_flavor_from_release(running_release or "")
+        if flavor:
+            return (
+                "linux-image-{}".format(flavor),
+                "linux-headers-{}".format(flavor),
+            )
         if "ubuntu" in ids or not values.get("ID"):
             return ("linux-image-generic", "linux-headers-generic")
         if "debian" in ids:
@@ -124,8 +152,26 @@ def default_packages(
     if manager == "dnf":
         return ("kernel",)
     raise PackageError(
-        "unsupported package manager {!r}; use apt or dnf".format(manager)
+        "不支持的包管理器 {!r}；请使用 apt 或 dnf".format(manager)
     )
+
+
+def _apt_candidate_available(
+    runner: CommandRunner, package: str
+) -> bool:
+    try:
+        result = runner.run(
+            ["apt-cache", "policy", package], capture=True, check=False
+        )
+    except (CommandError, OSError):
+        return False
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        if line.strip().startswith("Candidate:"):
+            value = line.split(":", 1)[1].strip().lower()
+            return bool(value and value != "(none)")
+    return False
 
 
 def detect_manager(
@@ -151,8 +197,8 @@ def detect_manager(
     if has_apt and has_dnf:
         return "apt"
     raise PackageError(
-        "cannot detect a supported package manager (apt or dnf); "
-        "set packages.manager explicitly"
+        "无法检测到受支持的包管理器（apt 或 dnf）；"
+        "请显式设置 packages.manager"
     )
 
 
@@ -164,7 +210,7 @@ def _package_kernel_version(version: str) -> str:
     match = re.match(r"^(?P<base>\d+\.\d+(?:\.\d+)?)", value)
     if not match:
         raise PackageError(
-            "cannot parse kernel version from package version {!r}".format(
+            "无法从软件包版本 {!r} 解析内核版本".format(
                 version
             )
         )
@@ -172,7 +218,7 @@ def _package_kernel_version(version: str) -> str:
         return str(KernelVersion.parse(match.group("base")))
     except VersionError as exc:
         raise PackageError(
-            "cannot parse kernel version from package version {!r}".format(
+            "无法从软件包版本 {!r} 解析内核版本".format(
                 version
             )
         ) from exc
@@ -196,7 +242,7 @@ class PackageBackend:
         self.runner = runner
         self.packages = tuple(packages)
         if not self.packages:
-            raise PackageError("kernel package list must not be empty")
+            raise PackageError("内核包列表不能为空")
 
     def describe(self) -> str:
         return "{} ({})".format(self.name, ", ".join(self.packages))
@@ -229,7 +275,7 @@ class AptBackend(PackageBackend):
         )
         if result.returncode != 0:
             raise PackageError(
-                "apt-cache policy failed for {}: {}".format(
+                "apt-cache policy 查询 {} 失败: {}".format(
                     package, result.stderr.strip() or result.stdout.strip()
                 )
             )
@@ -248,8 +294,8 @@ class AptBackend(PackageBackend):
                     candidate = value
         if candidate is None:
             raise PackageError(
-                "apt has no candidate version for {}; run apt-get update or "
-                "check packages.kernel_packages".format(package)
+                "apt 中没有 {} 的候选版本；请先运行 apt-get update，"
+                "或检查 packages.kernel_packages".format(package)
             )
         return installed, candidate
 
@@ -353,7 +399,7 @@ class AptBackend(PackageBackend):
         )
 
     def refresh(self) -> None:
-        LOGGER.info("refreshing apt package indexes")
+        LOGGER.info("正在刷新 apt 软件源索引")
         self.runner.run(["apt-get", "update", "-q"])
 
     def install_command(self) -> List[str]:
@@ -370,7 +416,7 @@ class AptBackend(PackageBackend):
 
     def install(self) -> None:
         LOGGER.info(
-            "installing prebuilt kernel packages with apt: %s",
+            "正在使用 apt 安装预编译内核包: %s",
             ", ".join(self.packages),
         )
         self.runner.run(
@@ -455,7 +501,7 @@ class DnfBackend(PackageBackend):
             )
             if check.returncode not in (0, 100):
                 raise PackageError(
-                    "dnf check-update failed for {}: {}".format(
+                    "dnf check-update 查询 {} 失败: {}".format(
                         package, check.stderr.strip() or check.stdout.strip()
                     )
                 )
@@ -470,7 +516,7 @@ class DnfBackend(PackageBackend):
                 candidate = installed[0]
             if candidate is None:
                 raise PackageError(
-                    "dnf has no available version for {}".format(package)
+                    "dnf 中没有 {} 的可用版本".format(package)
                 )
             states.append((package, installed, candidate, update_available))
 
@@ -512,7 +558,7 @@ class DnfBackend(PackageBackend):
         )
 
     def refresh(self) -> None:
-        LOGGER.info("refreshing dnf package metadata")
+        LOGGER.info("正在刷新 dnf 软件源元数据")
         self.runner.run(["dnf", "makecache", "-y", "--refresh"])
 
     def install_command(self) -> List[str]:
@@ -522,7 +568,7 @@ class DnfBackend(PackageBackend):
 
     def install(self) -> None:
         LOGGER.info(
-            "installing prebuilt kernel packages with dnf: %s",
+            "正在使用 dnf 安装预编译内核包: %s",
             ", ".join(self.packages),
         )
         self.runner.run(self.install_command())
@@ -532,6 +578,7 @@ def build_backend(
     config: Config,
     runner: CommandRunner,
     os_release: Optional[Dict[str, str]] = None,
+    running_release: Optional[str] = None,
 ) -> PackageBackend:
     values = os_release if os_release is not None else _read_os_release()
     manager = (config.package_manager or "auto").strip().lower()
@@ -539,13 +586,35 @@ def build_backend(
         manager = detect_manager(runner, values)
     if manager not in ("apt", "dnf"):
         raise PackageError(
-            "unsupported package manager {!r}; use packages.manager = auto, "
-            "apt or dnf".format(manager)
+            "不支持的包管理器 {!r}；请设置 packages.manager = auto、apt 或 dnf".format(
+                manager
+            )
         )
 
     package_setting = (config.kernel_packages or "auto").strip()
     if package_setting.lower() == "auto":
-        packages = default_packages(manager, values)
+        packages = default_packages(
+            manager,
+            values,
+            running_release=running_release or platform.release(),
+        )
+        fallback = default_packages(manager, values)
+        if (
+            manager == "apt"
+            and packages != fallback
+            and not all(
+                _apt_candidate_available(runner, package)
+                for package in packages
+            )
+        ):
+            LOGGER.info(
+                "当前内核变体（flavor）对应的软件包 %s 在 apt 中不可用，"
+                "改用 %s；如需固定运行内核变体，请设置 "
+                "packages.kernel_packages",
+                ", ".join(packages),
+                ", ".join(fallback),
+            )
+            packages = fallback
     else:
         packages = parse_package_list(package_setting)
 
@@ -557,7 +626,7 @@ def build_backend(
     missing = [command for command in required if not runner.which(command)]
     if missing:
         raise PackageError(
-            "package manager {} is missing required commands: {}".format(
+            "包管理器 {} 缺少必需命令: {}".format(
                 manager, ", ".join(missing)
             )
         )

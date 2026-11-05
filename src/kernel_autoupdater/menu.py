@@ -7,8 +7,15 @@ unusable there.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import logging
 import os
+import queue
+import re
 import sys
+import threading
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -19,6 +26,7 @@ from kernel_autoupdater.config_editor import (
     set_value,
     write_config_atomic,
 )
+from kernel_autoupdater.runner import command_output_sink
 from kernel_autoupdater.system import running_kernel
 
 Action = Callable[[Config], int]
@@ -39,11 +47,11 @@ REQUIRED_ACTIONS: Tuple[str, ...] = (
 _MAIN_ENTRIES: Tuple[Tuple[str, str], ...] = (
     ("检查内核更新", "check"),
     ("更新方式：{method}（切换）", "method"),
-    ("预览内核更新（dry-run）", "dry_run"),
+    ("预览内核更新（不安装）", "dry_run"),
     ("立即安装内核更新", "update"),
     ("程序自更新", "self_update"),
     ("设置", "settings"),
-    ("环境自检（doctor）", "doctor"),
+    ("环境自检", "doctor"),
     ("运行状态", "status"),
     ("已安装内核", "kernels"),
     ("启用定时器", "enable"),
@@ -324,89 +332,507 @@ def _format_setting(config: Config, setting: _Setting) -> str:
         shown = "[开]" if value else "[关]"
     else:
         shown = str(value)
-    return "{:<34} {}".format(setting.label, shown)
+    return "{} {}".format(_pad_display(setting.label, 34), shown)
 
 
-def _leave_curses(curses, stdscr) -> None:
+_ACTION_TITLES = {
+    "check": "检查内核更新",
+    "dry_run": "预览内核更新",
+    "update": "安装内核更新",
+    "self_update": "程序自更新",
+    "status": "运行状态",
+    "kernels": "已安装内核",
+    "doctor": "环境自检",
+    "enable": "启用定时器",
+    "disable": "停用定时器",
+    "log": "查看日志",
+}
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_OUTPUT_LIMIT = 5000
+_CHOICE_INSTRUCTIONS = "Enter 选择   ↑/↓ 或 j/k 移动   Esc/q 取消"
+
+
+class _ActionStream(io.TextIOBase):
+    """Capture print()/stderr output from a TUI action line by line."""
+
+    def __init__(self, emit: Callable[[str], None]):
+        super().__init__()
+        self._emit = emit
+        self._buffer = ""
+
+    def writable(self) -> bool:
+        return True
+
+    def isatty(self) -> bool:
+        return False
+
+    def write(self, text: str) -> int:
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._emit(line)
+        return len(text)
+
+    def flush(self) -> None:
+        if self._buffer:
+            self._emit(self._buffer)
+            self._buffer = ""
+
+
+class _QueueLogHandler(logging.Handler):
+    def __init__(self, emit: Callable[[str], None]):
+        super().__init__(logging.INFO)
+        self._emit = emit
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = self.format(record)
+        except Exception:
+            self.handleError(record)
+            return
+        prefix = {
+            "WARNING": "警告: ",
+            "ERROR": "错误: ",
+            "CRITICAL": "严重: ",
+        }.get(record.levelname, "")
+        self._emit(prefix + message)
+
+
+@contextlib.contextmanager
+def _tui_logging(emit: Callable[[str], None]):
+    root = logging.getLogger()
+    saved_level = root.level
+    console_handlers = []
+    for handler in list(root.handlers):
+        if isinstance(handler, logging.StreamHandler) and not isinstance(
+            handler, logging.FileHandler
+        ):
+            console_handlers.append(handler)
+            root.removeHandler(handler)
+
+    if root.level > logging.INFO:
+        root.setLevel(logging.INFO)
+    handler = _QueueLogHandler(emit)
+    root.addHandler(handler)
     try:
-        curses.def_prog_mode()
+        yield
+    finally:
+        root.removeHandler(handler)
+        handler.close()
+        for saved in console_handlers:
+            root.addHandler(saved)
+        root.setLevel(saved_level)
+
+
+def _clean_output(text: str) -> str:
+    return _ANSI_RE.sub("", text).replace("\r", "")
+
+
+def _display_width(text: str) -> int:
+    width = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+    return width
+
+
+def _pad_display(text: str, width: int) -> str:
+    return text + " " * max(0, width - _display_width(text))
+
+
+def _wrap_output_lines(lines: Sequence[str], width: int) -> List[str]:
+    """Wrap captured output so the output view never hides long lines."""
+
+    usable = max(1, width - 1)
+    wrapped: List[str] = []
+    for text in lines:
+        if not text:
+            wrapped.append("")
+            continue
+        current: List[str] = []
+        current_width = 0
+        for char in text.expandtabs(8):
+            char_width = (
+                0
+                if unicodedata.combining(char)
+                else (
+                    2
+                    if unicodedata.east_asian_width(char) in ("W", "F")
+                    else 1
+                )
+            )
+            if current and current_width + char_width > usable:
+                wrapped.append("".join(current))
+                current = []
+                current_width = 0
+            current.append(char)
+            current_width += char_width
+        wrapped.append("".join(current))
+    return wrapped
+
+
+def _run_action_worker(
+    callback: Action,
+    config: Config,
+    events: "queue.Queue[Tuple[str, object]]",
+) -> None:
+    def emit(text: str) -> None:
+        for line in _clean_output(str(text)).split("\n"):
+            events.put(("line", line))
+
+    stream = _ActionStream(emit)
+    code = 1
+    try:
+        with _tui_logging(emit), contextlib.redirect_stdout(
+            stream
+        ), contextlib.redirect_stderr(stream), command_output_sink(emit):
+            try:
+                result = callback(config)
+                try:
+                    code = int(result)
+                except (TypeError, ValueError):
+                    code = 1
+                    emit("警告: 动作返回了无效状态。")
+                else:
+                    if code not in (0, 10):
+                        emit("警告: 动作退出状态 {}。".format(code))
+            except KeyboardInterrupt:
+                code = 130
+                emit("动作已中断。")
+            except SystemExit as exc:
+                if isinstance(exc.code, int):
+                    code = exc.code
+                else:
+                    code = 1
+                emit("动作已退出（状态 {}）。".format(code))
+            except Exception as exc:
+                code = 1
+                emit("动作失败: {}".format(exc))
+    finally:
+        stream.flush()
+        events.put(("done", code))
+
+
+def _draw_prompt(
+    curses,
+    stdscr,
+    label: str,
+    current: str,
+    value: str,
+) -> None:
+    try:
+        stdscr.erase()
+        height, width = stdscr.getmaxyx()
     except curses.error:
-        pass
+        return
+    _safe_addstr(curses, stdscr, 0, 0, "编辑设置", curses.A_BOLD)
+    _safe_addstr(curses, stdscr, 1, 0, label)
+    _safe_addstr(curses, stdscr, 2, 0, "当前值: {}".format(current or "（空）"))
+    if height >= 4:
+        available = max(1, width - 3)
+        shown = value[-available:] if len(value) > available else value
+        _safe_addstr(curses, stdscr, 3, 0, "> " + shown)
+        try:
+            stdscr.move(3, min(width - 2, 2 + len(shown)))
+        except curses.error:
+            pass
+    if height >= 1:
+        _safe_addstr(
+            curses,
+            stdscr,
+            height - 1,
+            0,
+            "Enter 保存   Esc 取消   留空保持原值",
+        )
     try:
-        curses.endwin()
-    except curses.error:
-        pass
-
-
-def _restore_curses(curses, stdscr) -> None:
-    try:
-        curses.reset_prog_mode()
-    except curses.error:
-        pass
-    try:
-        stdscr.clear()
         stdscr.refresh()
-    except curses.error:
-        pass
-    try:
-        curses.curs_set(0)
-    except curses.error:
+    except (curses.error, UnicodeEncodeError):
         pass
 
 
 def _prompt_value(
     curses, stdscr, label: str, current: str
 ) -> Optional[str]:
-    """Ask for a value outside curses.  An empty answer keeps *current*."""
+    """Edit a value inside curses.  An empty answer keeps *current*."""
 
-    _leave_curses(curses, stdscr)
+    value = ""
     try:
-        print()
-        try:
-            raw = input("{} [{}]: ".format(label, current))
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return None
-        value = raw.strip()
-        return current if not value else value
-    finally:
-        _restore_curses(curses, stdscr)
-
-
-def _run_action(curses, stdscr, callback: Action, config: Config) -> int:
-    code = 0
-    _leave_curses(curses, stdscr)
+        curses.curs_set(1)
+    except curses.error:
+        pass
     try:
-        try:
-            result = callback(config)
+        while True:
+            _draw_prompt(curses, stdscr, label, current, value)
             try:
-                code = int(result)
-            except (TypeError, ValueError):
-                code = 1
-                print()
-                print("警告: 动作返回了无效状态。")
-            else:
-                if code not in (0, 10):
-                    print()
-                    print("警告: 动作退出状态 {}。".format(code))
-        except KeyboardInterrupt:
-            code = 130
-            print()
-            print("动作已中断。")
-        except Exception as exc:
-            code = 1
-            print()
-            print("动作失败: {}".format(exc))
-
-        print()
-        sys.stdout.flush()
-        try:
-            input("按 Enter 返回菜单...")
-        except (EOFError, KeyboardInterrupt):
-            pass
+                key = stdscr.get_wch()
+            except curses.error:
+                continue
+            if isinstance(key, str):
+                if key in ("\n", "\r"):
+                    value = value.strip()
+                    return current if not value else value
+                if key in ("\x1b", "\x03"):
+                    return None
+                if key in ("\x7f", "\b"):
+                    value = value[:-1]
+                elif key == "\x15":
+                    value = ""
+                elif key.isprintable():
+                    value += key
+            elif key in (
+                getattr(curses, "KEY_BACKSPACE", -1),
+                getattr(curses, "KEY_ENTER", -1),
+                127,
+                8,
+            ):
+                if key == getattr(curses, "KEY_ENTER", -1):
+                    value = value.strip()
+                    return current if not value else value
+                value = value[:-1]
     finally:
-        _restore_curses(curses, stdscr)
-    return code
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+
+def _choice_dialog(
+    curses,
+    stdscr,
+    header: Sequence[str],
+    title: str,
+    items: Sequence[str],
+    status: str = "",
+) -> Optional[int]:
+    selected = 0
+    while True:
+        _draw_screen(
+            curses,
+            stdscr,
+            header,
+            title,
+            items,
+            selected,
+            _CHOICE_INSTRUCTIONS,
+            status,
+        )
+        key = stdscr.getch()
+        if key == -1:
+            return None
+        if key == getattr(curses, "KEY_RESIZE", -1):
+            continue
+        if key in (27, ord("q")):
+            return None
+        if key in (getattr(curses, "KEY_UP", -1), ord("k")):
+            selected = (selected - 1) % len(items)
+            continue
+        if key in (getattr(curses, "KEY_DOWN", -1), ord("j")):
+            selected = (selected + 1) % len(items)
+            continue
+        if key in (10, 13, getattr(curses, "KEY_ENTER", -1)):
+            return selected
+
+
+def _output_body_height(stdscr) -> int:
+    try:
+        height, _ = stdscr.getmaxyx()
+    except Exception:
+        return 1
+    return max(1, height - 7)
+
+
+def _draw_action_output(
+    curses,
+    stdscr,
+    header: Sequence[str],
+    title: str,
+    lines: Sequence[str],
+    offset: int,
+    status: str,
+    footer: str,
+) -> None:
+    try:
+        stdscr.erase()
+        height, width = stdscr.getmaxyx()
+    except curses.error:
+        return
+
+    row = 0
+    for text in list(header)[:3]:
+        _safe_addstr(curses, stdscr, row, 0, text)
+        row += 1
+    if row < height:
+        _safe_addstr(curses, stdscr, row, 0, title, curses.A_BOLD)
+        row += 1
+    if row < height:
+        _safe_addstr(curses, stdscr, row, 0, "-" * max(1, width - 1))
+        row += 1
+
+    body = max(1, height - row - 2)
+    visible = list(lines[offset : offset + body])
+    if not visible:
+        visible = ["正在准备..."]
+    for text in visible:
+        if row >= height - 2:
+            break
+        _safe_addstr(curses, stdscr, row, 0, text)
+        row += 1
+    if height >= 2:
+        _safe_addstr(curses, stdscr, height - 2, 0, status)
+    if height >= 1:
+        _safe_addstr(curses, stdscr, height - 1, 0, footer)
+    try:
+        stdscr.refresh()
+    except (curses.error, UnicodeEncodeError):
+        pass
+
+
+def _run_action(
+    curses,
+    stdscr,
+    callback: Action,
+    config: Config,
+    config_path: Path,
+    version: str,
+    title: str,
+) -> int:
+    events: "queue.Queue[Tuple[str, object]]" = queue.Queue()
+    worker = threading.Thread(
+        target=_run_action_worker,
+        args=(callback, config, events),
+        daemon=True,
+    )
+    worker.start()
+
+    lines: List[str] = []
+    display_lines: List[str] = []
+    display_width = -1
+    display_source_count = 0
+    offset = 0
+    follow = True
+    done = False
+    code: Optional[int] = None
+    notice = ""
+    spinner = "|/-\\"
+    spinner_index = 0
+    stdscr.timeout(100)
+    try:
+        while True:
+            for _ in range(500):
+                try:
+                    kind, payload = events.get_nowait()
+                except queue.Empty:
+                    break
+                if kind == "line":
+                    lines.append(str(payload))
+                    if len(lines) > _OUTPUT_LIMIT:
+                        dropped = len(lines) - _OUTPUT_LIMIT
+                        lines = lines[dropped:]
+                        offset = max(0, offset - dropped)
+                        display_source_count = -1
+                elif kind == "done":
+                    done = True
+                    code = int(payload)
+
+            try:
+                _, width = stdscr.getmaxyx()
+            except curses.error:
+                width = 80
+            if width != display_width:
+                display_lines = _wrap_output_lines(lines, width)
+                display_width = width
+                display_source_count = len(lines)
+            elif display_source_count < 0 or len(lines) < display_source_count:
+                display_lines = _wrap_output_lines(lines, width)
+                display_source_count = len(lines)
+            elif len(lines) > display_source_count:
+                new_lines = _wrap_output_lines(
+                    lines[display_source_count:], width
+                )
+                display_lines.extend(new_lines)
+                display_source_count = len(lines)
+            body = _output_body_height(stdscr)
+            max_offset = max(0, len(display_lines) - body)
+            if follow:
+                offset = max_offset
+            else:
+                offset = max(0, min(offset, max_offset))
+
+            header = _header_lines(config, config_path, version)
+            if done:
+                if code == 0:
+                    status = "已完成（退出码 0）"
+                elif code == 10:
+                    status = "已完成：有可用更新（退出码 10）"
+                else:
+                    status = "执行失败（退出码 {}）".format(code)
+                footer = "↑/↓ PgUp/PgDn 滚动   Enter/Esc/q 返回"
+            else:
+                spinner_index = (spinner_index + 1) % len(spinner)
+                status = "{} 正在执行...".format(spinner[spinner_index])
+                if notice:
+                    status += "  " + notice
+                footer = "↑/↓ PgUp/PgDn 滚动   任务完成后可返回"
+
+            _draw_action_output(
+                curses,
+                stdscr,
+                header,
+                title,
+                display_lines,
+                offset,
+                status,
+                footer,
+            )
+
+            key = stdscr.getch()
+            if key == -1:
+                continue
+            if key == getattr(curses, "KEY_RESIZE", -1):
+                continue
+            if key in (
+                getattr(curses, "KEY_UP", -1),
+                ord("k"),
+            ):
+                follow = False
+                offset = max(0, offset - 1)
+                notice = ""
+                continue
+            if key in (
+                getattr(curses, "KEY_DOWN", -1),
+                ord("j"),
+            ):
+                follow = False
+                offset = min(max_offset, offset + 1)
+                notice = ""
+                continue
+            if key == getattr(curses, "KEY_PPAGE", -1):
+                follow = False
+                offset = max(0, offset - body)
+                notice = ""
+                continue
+            if key == getattr(curses, "KEY_NPAGE", -1):
+                follow = False
+                offset = min(max_offset, offset + body)
+                notice = ""
+                continue
+            if key == getattr(curses, "KEY_HOME", -1):
+                follow = False
+                offset = 0
+                notice = ""
+                continue
+            if key == getattr(curses, "KEY_END", -1):
+                follow = True
+                notice = ""
+                continue
+            if key in (10, 13, 27, getattr(curses, "KEY_ENTER", -1), ord("q")):
+                if done:
+                    return code if code is not None else 1
+                notice = "任务仍在运行，请等待完成。"
+    finally:
+        stdscr.timeout(-1)
 
 
 def _restore_config_file(path: Path, text: str, existed: bool) -> bool:
@@ -445,8 +871,10 @@ def _save_setting(
     except OSError as exc:
         return None, "无法保存 {}: {}（请尝试 root）。".format(path, exc)
 
+    notes: List[str] = []
     try:
-        new_config = Config.load(path, explicit=True)
+        with _tui_logging(notes.append):
+            new_config = Config.load(path, explicit=True)
     except ConfigError as exc:
         if _restore_config_file(path, previous_text, existed):
             return (
@@ -461,7 +889,10 @@ def _save_setting(
                 setting.section, setting.key, exc
             ),
         )
-    return new_config, "已保存 {}.{}。".format(setting.section, setting.key)
+    message = "已保存 {}.{}。".format(setting.section, setting.key)
+    if notes:
+        message += " " + " ".join(notes)
+    return new_config, message
 
 
 def _validate_setting_value(
@@ -779,7 +1210,46 @@ def _run_curses(
             )
             continue
 
-        code = _run_action(curses, stdscr, actions[action_key], config)
+        if action_key == "update":
+            choice = _choice_dialog(
+                curses,
+                stdscr,
+                _header_lines(config, config_path, version),
+                "立即安装内核更新",
+                ["安装，完成后不重启", "安装后重启", "取消"],
+                "请选择安装选项",
+            )
+            if choice is None or choice == 2:
+                continue
+            callback = (
+                actions.get("update_reboot", actions["update"])
+                if choice == 1
+                else actions["update"]
+            )
+        elif action_key == "self_update":
+            choice = _choice_dialog(
+                curses,
+                stdscr,
+                _header_lines(config, config_path, version),
+                "程序自更新",
+                ["从 GitHub 重新安装 kau", "取消"],
+                "更新完成后需要重新启动 kau",
+            )
+            if choice != 0:
+                continue
+            callback = actions["self_update"]
+        else:
+            callback = actions[action_key]
+
+        code = _run_action(
+            curses,
+            stdscr,
+            callback,
+            config,
+            config_path,
+            version,
+            _ACTION_TITLES.get(action_key, action_key),
+        )
         message = (
             ""
             if code in (0, 10)
@@ -801,7 +1271,7 @@ def run_menu(
 
     if not _stream_is_tty(sys.stdin) or not _stream_is_tty(sys.stdout):
         print(
-            "交互菜单需要真实终端 (terminal)，stdin 和 stdout 必须都是 TTY。",
+            "交互菜单需要真实终端，标准输入和标准输出都必须连接到 TTY。",
             file=sys.stderr,
         )
         return 2
@@ -810,7 +1280,7 @@ def run_menu(
         import curses
     except Exception as exc:
         print(
-            "交互菜单不可用 (unavailable): {}。请改用 kau 子命令。".format(exc),
+            "交互菜单不可用: {}。请改用 kau 子命令。".format(exc),
             file=sys.stderr,
         )
         return 2

@@ -212,7 +212,7 @@ def _save_state(store: StateStore, state: State) -> None:
     try:
         store.save(state)
     except OSError as exc:
-        LOGGER.warning("cannot save updater state: %s", exc)
+        LOGGER.warning("无法保存更新状态: %s", exc)
 
 
 def _fetch_feed(config: Config, offline: bool = False) -> kernelorg.Feed:
@@ -271,53 +271,53 @@ def cmd_check(args: argparse.Namespace, config: Config) -> int:
     _save_state(store, state)
 
     if result.feed_stale:
-        LOGGER.warning("release feed came from cache; it may be out of date")
+        LOGGER.warning("发布信息来自缓存，可能已过期")
 
     if args.json:
         print(json.dumps(_check_result_payload(result), indent=2, sort_keys=True))
     else:
-        print("Current kernel : {} ({})".format(result.current, result.current_base))
+        print("当前内核 : {} ({})".format(result.current, result.current_base))
         if result.method == "package" and result.package is not None:
             print(
-                "Method         : package ({})".format(result.package.manager)
+                "更新方式 : package ({})".format(result.package.manager)
             )
             print(
-                "Kernel packages: {}".format(
+                "内核包   : {}".format(
                     ", ".join(result.package.packages)
                 )
             )
             print(
-                "Installed pkg  : {}".format(
-                    result.package.installed_version or "not installed"
+                "已安装包 : {}".format(
+                    result.package.installed_version or "未安装"
                 )
             )
             print(
-                "Candidate pkg  : {}".format(result.package.candidate_version)
+                "候选包   : {}".format(result.package.candidate_version)
             )
             print(
-                "Kernel base    : {}".format(result.package.kernel_version)
+                "内核基线 : {}".format(result.package.kernel_version)
             )
         else:
-            print("Method         : source build")
-            print("Channel        : {}".format(result.channel))
+            print("更新方式 : 源码编译 build")
+            print("更新通道 : {}".format(result.channel))
         latest_label = (
-            "Latest package"
+            "最新包  "
             if result.method == "package"
-            else "Latest release"
+            else "最新版本"
         )
         print("{} : {}".format(latest_label, result.latest_version))
         if result.latest.released and result.method != "package":
-            print("Released       : {}".format(result.latest.released))
-        print("Source         : {}".format(result.latest.source))
-        print("Update available: {}".format("yes" if result.update_available else "no"))
+            print("发布时间 : {}".format(result.latest.released))
+        print("来源     : {}".format(result.latest.source))
+        print("有可用更新: {}".format("是" if result.update_available else "否"))
         if result.pending_reboot:
             print(
-                "Pending reboot  : yes ({} is installed)".format(
+                "等待重启: 是（{} 已安装）".format(
                     result.installed_release
                 )
             )
         if result.installed_release:
-            print("Last kau kernel : {}".format(result.installed_release))
+            print("上次安装内核: {}".format(result.installed_release))
 
     return 10 if result.update_available else 0
 
@@ -372,16 +372,16 @@ def cmd_auto(args: argparse.Namespace, config: Config) -> int:
 
     if result.pending_reboot:
         LOGGER.info(
-            "kernel %s is already installed; reboot to activate it",
+            "内核 %s 已安装，请重启以启用",
             result.installed_release,
         )
         return 0
     if not result.update_available:
-        LOGGER.info("no newer kernel than %s", result.current)
+        LOGGER.info("没有比 %s 更新的内核", result.current)
         return 0
     if not config.auto_update:
         LOGGER.info(
-            "kernel %s is available but updater.auto_update is false",
+            "发现内核 %s，但 updater.auto_update 为 false",
             result.latest_version,
         )
         return 0
@@ -467,27 +467,32 @@ def cmd_status(args: argparse.Namespace, config: Config) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
-    print("Running kernel : {}".format(payload["running"]))
-    print("Update method  : {}".format(payload["update_method"]))
+    print("运行内核 : {}".format(payload["running"]))
+    print("更新方式 : {}".format(payload["update_method"]))
     if config.update_method == "build":
-        print("Channel        : {}".format(payload["channel"]))
+        print("更新通道 : {}".format(payload["channel"]))
     else:
-        print("Package manager: {}".format(payload["package_manager"]))
-        print("Kernel packages: {}".format(payload["kernel_packages"]))
-    print("Config         : {}".format(payload["config"] or "built-in defaults"))
-    print("Work dir       : {}".format(payload["work_dir"]))
-    print("Auto update    : {}".format("yes" if config.auto_update else "no"))
-    print("Auto reboot    : {}".format("yes" if config.auto_reboot else "no"))
+        print("包管理器 : {}".format(payload["package_manager"]))
+        print("内核包   : {}".format(payload["kernel_packages"]))
+    print("配置文件 : {}".format(payload["config"] or "内置默认值"))
+    print("工作目录 : {}".format(payload["work_dir"]))
+    print("自动更新 : {}".format("是" if config.auto_update else "否"))
+    print("自动重启 : {}".format("是" if config.auto_reboot else "否"))
     if payload["timer"] is not None:
-        print("Timer          : {}".format(payload["timer"]))
-    print("Last check     : {}".format(state.last_check or "never"))
+        timer = {
+            "active": "运行中",
+            "inactive": "未运行",
+            "failed": "失败",
+        }.get(payload["timer"], payload["timer"])
+        print("定时器   : {}".format(timer))
+    print("上次检查 : {}".format(state.last_check or "从未"))
     if state.last_check_version:
-        print("Last seen      : {}".format(state.last_check_version))
-    print("Last update    : {}".format(state.last_update or "never"))
+        print("上次发现 : {}".format(state.last_check_version))
+    print("上次更新 : {}".format(state.last_update or "从未"))
     if state.last_error:
-        print("Last error     : {}".format(state.last_error))
+        print("上次错误 : {}".format(state.last_error))
     if state.installed:
-        print("Kernels built by kau:")
+        print("由 kau 安装的内核:")
         for item in state.installed:
             print(
                 "  {} ({}) at {}".format(
@@ -525,7 +530,7 @@ def cmd_kernels(args: argparse.Namespace, config: Config) -> int:
         print(json.dumps(rows, indent=2))
         return 0
     if not rows:
-        print("No kernel module directories found under /lib/modules.")
+        print("在 /lib/modules 下没有找到内核模块目录。")
         return 0
     for row in rows:
         marker = "*" if row["running"] else " "
@@ -566,34 +571,38 @@ def _menu_self_update(config: Config) -> int:
         ref=DEFAULT_REF,
         check_only=False,
         force=False,
-        assume_yes=False,
+        assume_yes=True,
     )
 
 
 def _menu_update(config: Config) -> int:
+    return _menu_update_with_reboot(config, reboot=False)
+
+
+def _menu_update_reboot(config: Config) -> int:
+    return _menu_update_with_reboot(config, reboot=True)
+
+
+def _menu_update_with_reboot(config: Config, reboot: bool) -> int:
     geteuid = getattr(os, "geteuid", None)
     if callable(geteuid) and geteuid() != 0:
-        print("Kernel installation requires root. Re-run with: sudo kau")
+        print("安装内核需要 root 权限，请使用 sudo kau 运行。")
         return 1
-    print("Current kernel: {}".format(running_kernel()))
-    print("Update method : {}".format(config.update_method))
+    print("当前内核: {}".format(running_kernel()))
+    print("更新方式: {}".format(config.update_method))
     if config.update_method == "build":
-        print("Channel       : {}".format(config.channel))
+        print("更新通道: {}".format(config.channel))
     else:
-        print("Package manager: {}".format(config.package_manager))
-        print("Kernel packages: {}".format(config.kernel_packages))
-    answer = input("Install the latest kernel now? [y/N] ").strip().lower()
-    if answer not in ("y", "yes"):
-        print("Cancelled.")
-        return 0
-    reboot = input("Reboot after a successful install? [y/N] ").strip().lower()
+        print("包管理器: {}".format(config.package_manager))
+        print("内核包: {}".format(config.kernel_packages))
+    print("安装后重启: {}".format("是" if reboot else "否"))
     return cmd_update(
         SimpleNamespace(
             to=None,
             dry_run=False,
             yes=True,
             force=False,
-            reboot=reboot in ("y", "yes"),
+            reboot=reboot,
             keep_build=False,
             defconfig=False,
             jobs=None,
@@ -626,7 +635,7 @@ def _menu_log(config: Config) -> int:
     if config.log_file:
         try:
             if Path(config.log_file).is_file():
-                print("Log: {}".format(config.log_file))
+                print("日志文件: {}".format(config.log_file))
                 print()
                 lines = Path(config.log_file).read_text(
                     encoding="utf-8", errors="replace"
@@ -634,10 +643,10 @@ def _menu_log(config: Config) -> int:
                 print("\n".join(lines[-80:]))
                 return 0
         except OSError as exc:
-            print("Cannot read {}: {}".format(config.log_file, exc))
+            print("无法读取 {}: {}".format(config.log_file, exc))
 
     if shutil.which("journalctl"):
-        return subprocess.call(
+        result = subprocess.run(
             [
                 "journalctl",
                 "-u",
@@ -645,9 +654,26 @@ def _menu_log(config: Config) -> int:
                 "-n",
                 "80",
                 "--no-pager",
-            ]
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    print("No log file or journalctl available.")
+        output = "\n".join(
+            part for part in (result.stdout, result.stderr) if part
+        )
+        output = "\n".join(
+            line
+            for line in output.splitlines()
+            if line.strip()
+            not in ("-- No entries --", "No journal files were found.")
+        ).strip()
+        if output:
+            print(output)
+        else:
+            print("没有可显示的日志记录。")
+        return result.returncode
+    print("没有可用的日志文件或 journalctl。")
     return 0
 
 
@@ -658,6 +684,7 @@ def cmd_menu(args: argparse.Namespace, config: Config) -> int:
         "check": _menu_check,
         "dry_run": _menu_dry_run,
         "update": _menu_update,
+        "update_reboot": _menu_update_reboot,
         "self_update": _menu_self_update,
         "status": _menu_status,
         "kernels": _menu_kernels,
@@ -672,28 +699,43 @@ def cmd_menu(args: argparse.Namespace, config: Config) -> int:
 
 def _require_systemctl(runner: CommandRunner) -> None:
     if not runner.which("systemctl"):
-        raise UpdateError("systemctl is not available on this host")
+        raise UpdateError("当前系统没有 systemctl，无法管理定时器")
+
+
+def _require_timer_unit(runner: CommandRunner) -> None:
+    result = runner.run(
+        ["systemctl", "cat", "kernel-autoupdater.timer"],
+        capture=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise UpdateError(
+            "未找到 kernel-autoupdater.timer；"
+            "请重新运行安装脚本，或确认 systemd 可用"
+        )
 
 
 def cmd_enable(args: argparse.Namespace, config: Config) -> int:
     runner = CommandRunner()
     _require_systemctl(runner)
+    _require_timer_unit(runner)
     command = ["systemctl", "enable"]
     if args.now:
         command.append("--now")
     command.append("kernel-autoupdater.timer")
     runner.run(command)
-    LOGGER.info("kernel-autoupdater.timer enabled")
+    LOGGER.info("已启用 kernel-autoupdater.timer")
     return 0
 
 
 def cmd_disable(args: argparse.Namespace, config: Config) -> int:
     runner = CommandRunner()
     _require_systemctl(runner)
+    _require_timer_unit(runner)
     runner.run(
         ["systemctl", "disable", "--now", "kernel-autoupdater.timer"]
     )
-    LOGGER.info("kernel-autoupdater.timer disabled")
+    LOGGER.info("已停用 kernel-autoupdater.timer")
     return 0
 
 
@@ -712,7 +754,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         config = load_config(args.config)
     except ConfigError as exc:
-        print("kau: error: {}".format(exc), file=sys.stderr)
+        print("kau: 错误: {}".format(exc), file=sys.stderr)
         return 2
 
     setup_logging(
@@ -724,7 +766,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         return int(args.func(args, config))
     except KeyboardInterrupt:
-        LOGGER.error("interrupted")
+        LOGGER.error("操作已中断")
         return 130
     except (
         UpdateError,
@@ -742,12 +784,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ) as exc:
         LOGGER.error("%s", exc)
         if args.verbose:
-            LOGGER.debug("error details", exc_info=True)
+            LOGGER.debug("错误详情", exc_info=True)
         return 1
     except Exception as exc:  # keep systemd logs actionable
-        LOGGER.error("unexpected error: %s", exc)
+        LOGGER.error("发生未预期的错误: %s", exc)
         if args.verbose:
-            LOGGER.debug("error details", exc_info=True)
+            LOGGER.debug("错误详情", exc_info=True)
         return 1
     finally:
         shutdown_logging()

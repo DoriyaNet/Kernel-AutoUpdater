@@ -31,11 +31,11 @@ def update_lock(path: Path) -> Iterator[None]:
                 locked = True
             except OSError as exc:
                 raise LockError(
-                    "another kernel-autoupdater instance is running "
+                    "已有另一个 Kernel AutoUpdater 实例正在运行 "
                     "(lock: {})".format(path)
                 ) from exc
         else:  # pragma: no cover - Windows development
-            LOGGER.debug("fcntl unavailable; skipping process lock")
+            LOGGER.debug("当前平台没有 fcntl，跳过进程锁")
         yield
     finally:
         if locked and fcntl is not None:

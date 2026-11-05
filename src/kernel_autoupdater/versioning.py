@@ -95,8 +95,8 @@ class Channel:
         match = _CHANNEL_RE.match((value or "").strip().lower())
         if not match:
             raise VersionError(
-                "invalid channel {!r}; use stable, longterm, mainline "
-                "or longterm:<major.minor>".format(value)
+                "无效更新通道 {!r}；请使用 stable、longterm、mainline "
+                "或 longterm:<主版本.次版本>".format(value)
             )
         series = None
         if match.group("series"):
