@@ -20,6 +20,7 @@ stable / longterm 内核，下载并校验源码，沿用当前内核的 `.confi
 - 保留所有旧内核；记录由 `kau` 安装的版本，便于确认
 - systemd timer 每日检查；`auto_update` 控制是否无人值守安装
 - 文件锁防止并发更新；失败时写入状态与日志
+- 一键安装；`kau` / `kmenu` 打开交互菜单，常用配置可直接在 TUI 中修改
 - `--dry-run`、`doctor`、`check --json`，方便先验证再上线
 
 ## 支持范围
@@ -34,19 +35,40 @@ stable / longterm 内核，下载并校验源码，沿用当前内核的 `.confi
 
 内核源码来自 kernel.org 原版，**不会**合并发行版的内核补丁或 ABI 变更。
 
-## 安装
+## 一键安装
 
-要求：Linux、Python 3.9+、root、至少 12 GiB 空闲磁盘（可在配置中调整）。
+要求：Linux、Python 3.9+、root、`curl` 或 `wget`、至少 12 GiB 空闲磁盘（可在配置中调整）。
 
 ```bash
-git clone <repo-url> kernel-autoupdater
-cd kernel-autoupdater
-sudo bash scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/DoriyaNet/Kernel-AutoUpdater/master/install.sh | sudo bash
+# 或
+wget -qO- https://raw.githubusercontent.com/DoriyaNet/Kernel-AutoUpdater/master/install.sh | sudo bash
+```
+
+这条命令会下载 GitHub 上的最新 `master` 源码包并安装。可选参数：
+
+```bash
+# 不自动启用 systemd timer
+curl -fsSL https://raw.githubusercontent.com/DoriyaNet/Kernel-AutoUpdater/master/install.sh \
+  | sudo bash -s -- --no-timer
+
+# 指定分支或 tag（把 master 换成实际名称）
+curl -fsSL https://raw.githubusercontent.com/DoriyaNet/Kernel-AutoUpdater/master/install.sh \
+  | sudo bash -s -- --ref master
+```
+
+已经克隆仓库时，也可以本地安装：
+
+```bash
+git clone https://github.com/DoriyaNet/Kernel-AutoUpdater.git
+cd Kernel-AutoUpdater
+sudo bash install.sh
 ```
 
 安装脚本会：
 
 - 把程序打包为单文件 `/usr/local/bin/kau`（无第三方 Python 依赖）
+- 创建快捷命令 `/usr/local/bin/kmenu`，等价于直接运行 `kau`
 - 安装 systemd service / timer 和 logrotate 规则
 - 首次安装时写入 `/etc/kernel-autoupdater/config.ini`
 - 默认启用每日 timer，但 `auto_update = false`，所以只会检查、不会自动安装
@@ -54,7 +76,7 @@ sudo bash scripts/install.sh
 如果暂时不想启用 timer：
 
 ```bash
-sudo ENABLE_TIMER=0 bash scripts/install.sh
+sudo bash install.sh --no-timer
 ```
 
 然后执行自检和试运行：
@@ -64,6 +86,36 @@ sudo kau doctor
 sudo kau check
 sudo kau update --dry-run
 ```
+
+> `curl | sudo bash` 会以 root 执行远程脚本。请确认 URL 和仓库归属；对安全敏感的环境，
+> 建议先下载并审查 `install.sh`，或使用 git clone 后本地安装。
+
+## 交互菜单（TUI）
+
+安装后直接运行 `kau`，或使用快捷命令 `kmenu`，即可打开全屏交互菜单：
+
+```bash
+sudo kau        # 无参数：TTY 下打开菜单
+sudo kmenu      # 快捷方式
+sudo kau menu   # 显式打开
+sudo kau tui    # 别名
+```
+
+菜单内置：
+
+- 检查更新、预览更新（dry-run）、立即安装
+- 状态、已安装内核、doctor 自检、日志查看
+- 启用 / 停用 systemd timer
+- 编辑常用配置：channel、auto_update、auto_reboot、超时、工作目录、日志路径、
+  PGP 校验、`config_source`、`localversion`、jobs、initramfs / bootloader 等
+
+操作：方向键或 `j/k` 移动，`Enter` 选择，`Esc` / `q` 返回，主菜单按 `q` 退出。
+设置修改会立即写入 `/etc/kernel-autoupdater/config.ini`，并保留原有注释；写入后会
+重新加载配置校验，非法值会提示并恢复原文件。执行安装、检查等长任务时会临时退出
+curses，任务结束后按 Enter 返回菜单。
+
+菜单需要真实 TTY（Linux 终端 / SSH）；非 TTY 或没有 `curses` 时会返回明确错误，
+仍可使用普通子命令。
 
 ## 首次更新
 
@@ -160,6 +212,7 @@ Debian / Ubuntu 的内核配置会引用发行版签名密钥路径，而原版 
 
 | 命令 | 说明 |
 | --- | --- |
+| `kau` / `kmenu` / `kau menu` | 打开交互式 TUI 菜单 |
 | `kau check [--json] [--offline]` | 检查新版本；有更新时退出码为 `10` |
 | `kau update [--to VERSION] [--dry-run] [-y] [--force] [--reboot]` | 构建并安装 |
 | `kau auto [--dry-run]` | systemd 调用；受 `auto_update` 控制 |
@@ -281,5 +334,6 @@ PYTHONPATH=src python -m kernel_autoupdater --help
 - `builder.py`：预检、配置同步、编译、安装、回滚状态
 - `system.py`：发行版 / initramfs / Secure Boot 探测
 - `config.py`、`state.py`：配置与持久化
+- `menu.py`：curses TUI 菜单；`config_editor.py`：保留注释的配置编辑
 - `cli.py`：`kau` 子命令
 

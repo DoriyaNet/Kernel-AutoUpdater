@@ -59,6 +59,7 @@ update_bootloader = yes
         cases = [
             "[updater]\nauto_update = maybe\n",
             "[updater]\nchannel = beta\n",
+            "[updater]\nfeed_url =\n",
             "[updater]\nmin_free_gb = -1\n",
             "[build]\njobs = many\n",
         ]

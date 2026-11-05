@@ -5,7 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import shutil
+import subprocess
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Optional, Sequence
 
 from kernel_autoupdater import __version__, kernelorg
@@ -16,7 +21,12 @@ from kernel_autoupdater.builder import (
     Updater,
     check_for_update,
 )
-from kernel_autoupdater.config import Config, ConfigError, load_config
+from kernel_autoupdater.config import (
+    DEFAULT_CONFIG_PATH,
+    Config,
+    ConfigError,
+    load_config,
+)
 from kernel_autoupdater.doctor import print_checks, run_doctor
 from kernel_autoupdater.lock import LockError
 from kernel_autoupdater.logging_setup import setup_logging, shutdown_logging
@@ -56,7 +66,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--version", action="version", version="%(prog)s {}".format(__version__)
     )
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
+
+    menu = subparsers.add_parser(
+        "menu",
+        aliases=["tui", "ui"],
+        help="open the interactive terminal menu",
+    )
+    menu.set_defaults(func=cmd_menu)
 
     check = subparsers.add_parser(
         "check", help="check whether a newer kernel is available"
@@ -367,6 +384,120 @@ def cmd_doctor(args: argparse.Namespace, config: Config) -> int:
     return 1 if any(check.status == "FAIL" for check in checks) else 0
 
 
+def _menu_check(config: Config) -> int:
+    return cmd_check(SimpleNamespace(json=False, offline=False), config)
+
+
+def _menu_dry_run(config: Config) -> int:
+    return cmd_update(
+        SimpleNamespace(
+            to=None,
+            dry_run=True,
+            yes=True,
+            force=False,
+            reboot=False,
+            keep_build=False,
+            defconfig=False,
+            jobs=None,
+        ),
+        config,
+    )
+
+
+def _menu_update(config: Config) -> int:
+    geteuid = getattr(os, "geteuid", None)
+    if callable(geteuid) and geteuid() != 0:
+        print("Kernel installation requires root. Re-run with: sudo kau")
+        return 1
+    print("Current kernel: {}".format(running_kernel()))
+    print("Channel       : {}".format(config.channel))
+    answer = input("Install the latest kernel now? [y/N] ").strip().lower()
+    if answer not in ("y", "yes"):
+        print("Cancelled.")
+        return 0
+    reboot = input("Reboot after a successful install? [y/N] ").strip().lower()
+    return cmd_update(
+        SimpleNamespace(
+            to=None,
+            dry_run=False,
+            yes=True,
+            force=False,
+            reboot=reboot in ("y", "yes"),
+            keep_build=False,
+            defconfig=False,
+            jobs=None,
+        ),
+        config,
+    )
+
+
+def _menu_status(config: Config) -> int:
+    return cmd_status(SimpleNamespace(json=False), config)
+
+
+def _menu_kernels(config: Config) -> int:
+    return cmd_kernels(SimpleNamespace(json=False), config)
+
+
+def _menu_doctor(config: Config) -> int:
+    return cmd_doctor(SimpleNamespace(), config)
+
+
+def _menu_enable(config: Config) -> int:
+    return cmd_enable(SimpleNamespace(now=True), config)
+
+
+def _menu_disable(config: Config) -> int:
+    return cmd_disable(SimpleNamespace(), config)
+
+
+def _menu_log(config: Config) -> int:
+    if config.log_file:
+        try:
+            if Path(config.log_file).is_file():
+                print("Log: {}".format(config.log_file))
+                print()
+                lines = Path(config.log_file).read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
+                print("\n".join(lines[-80:]))
+                return 0
+        except OSError as exc:
+            print("Cannot read {}: {}".format(config.log_file, exc))
+
+    if shutil.which("journalctl"):
+        return subprocess.call(
+            [
+                "journalctl",
+                "-u",
+                "kernel-autoupdater.service",
+                "-n",
+                "80",
+                "--no-pager",
+            ]
+        )
+    print("No log file or journalctl available.")
+    return 0
+
+
+def cmd_menu(args: argparse.Namespace, config: Config) -> int:
+    from kernel_autoupdater.menu import run_menu
+
+    actions = {
+        "check": _menu_check,
+        "dry_run": _menu_dry_run,
+        "update": _menu_update,
+        "status": _menu_status,
+        "kernels": _menu_kernels,
+        "doctor": _menu_doctor,
+        "enable": _menu_enable,
+        "disable": _menu_disable,
+        "log": _menu_log,
+    }
+    path = config.source_path or DEFAULT_CONFIG_PATH
+    return run_menu(config, path, actions, __version__)
+
+
 def _require_systemctl(runner: CommandRunner) -> None:
     if not runner.which("systemctl"):
         raise UpdateError("systemctl is not available on this host")
@@ -397,6 +528,14 @@ def cmd_disable(args: argparse.Namespace, config: Config) -> int:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if not getattr(args, "command", None):
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            args.command = "menu"
+            args.func = cmd_menu
+        else:
+            parser.print_help()
+            return 0
 
     try:
         config = load_config(args.config)

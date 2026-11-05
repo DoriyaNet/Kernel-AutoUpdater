@@ -42,6 +42,7 @@ PY
     -o "${TMPDIR_BUILD}/kau"
 
 install -D -m 0755 "${TMPDIR_BUILD}/kau" /usr/local/bin/kau
+ln -sfn /usr/local/bin/kau /usr/local/bin/kmenu
 install -D -m 0644 "${ROOT}/packaging/systemd/kernel-autoupdater.service" \
     /etc/systemd/system/kernel-autoupdater.service
 install -D -m 0644 "${ROOT}/packaging/systemd/kernel-autoupdater.timer" \
@@ -76,11 +77,13 @@ else
 fi
 
 echo
-echo "Installed. Next steps:"
-echo "  1. edit /etc/kernel-autoupdater/config.ini"
+echo "Installed. /usr/local/bin/kmenu is a shortcut for kau."
+echo "Next steps:"
+echo "  1. run: kau        (or kmenu) to open the interactive menu"
 echo "  2. run: kau doctor"
 echo "  3. run: kau check"
 echo "  4. preview: kau update --dry-run"
+echo "  5. edit: /etc/kernel-autoupdater/config.ini"
 echo
 echo "Automatic installs stay disabled until auto_update = true."
 

@@ -14,13 +14,14 @@ rm -f /etc/systemd/system/kernel-autoupdater.service
 rm -f /etc/systemd/system/kernel-autoupdater.timer
 rm -f /etc/logrotate.d/kernel-autoupdater
 rm -f /usr/local/bin/kau
+rm -f /usr/local/bin/kmenu
 rm -rf /usr/local/share/doc/kernel-autoupdater
 
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     systemctl daemon-reload
 fi
 
-echo "Removed the kau binary, systemd units and logrotate rule."
+echo "Removed the kau binary, kmenu shortcut, systemd units and logrotate rule."
 echo "Configuration and built kernels were preserved:"
 echo "  /etc/kernel-autoupdater"
 echo "  /var/lib/kernel-autoupdater"

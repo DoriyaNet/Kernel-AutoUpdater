@@ -35,6 +35,11 @@ config_source = defconfig
     return config_path
 
 
+class _FakeTTY(io.StringIO):
+    def isatty(self):
+        return True
+
+
 class CliTests(unittest.TestCase):
     def test_check_json_reports_update(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -80,6 +85,31 @@ class CliTests(unittest.TestCase):
                     code = cmd_kernels(SimpleNamespace(json=True), config)
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(output.getvalue()), [])
+
+    def test_no_command_non_tty_prints_help(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = make_config(temp)
+            output = io.StringIO()
+            with patch("sys.stdin", io.StringIO()), patch("sys.stdout", output):
+                code = main(["--config", str(config_path)])
+            self.assertEqual(code, 0)
+            self.assertIn("usage: kau", output.getvalue())
+
+    def test_no_command_on_tty_opens_menu(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = make_config(temp)
+            with patch("sys.stdin", _FakeTTY()), patch("sys.stdout", _FakeTTY()), \
+                    patch("kernel_autoupdater.menu.run_menu", return_value=0) as run:
+                code = main(["--config", str(config_path)])
+            self.assertEqual(code, 0)
+            run.assert_called_once()
+
+    def test_menu_subcommand_uses_menu(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = make_config(temp)
+            with patch("kernel_autoupdater.menu.run_menu", return_value=7):
+                code = main(["--config", str(config_path), "menu"])
+            self.assertEqual(code, 7)
 
 
 if __name__ == "__main__":

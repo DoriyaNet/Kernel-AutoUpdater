@@ -110,6 +110,8 @@ class Config:
             raise ConfigError(str(exc)) from exc
 
         self.feed_url = self._get(parser, "updater", "feed_url", self.feed_url).strip()
+        if not self.feed_url:
+            raise ConfigError("updater.feed_url must not be empty")
         self.feed_timeout = _as_int(
             self._get(parser, "updater", "feed_timeout", str(self.feed_timeout)),
             "updater.feed_timeout",
