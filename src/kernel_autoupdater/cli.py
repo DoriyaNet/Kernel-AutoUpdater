@@ -31,6 +31,11 @@ from kernel_autoupdater.doctor import print_checks, run_doctor
 from kernel_autoupdater.lock import LockError
 from kernel_autoupdater.logging_setup import setup_logging, shutdown_logging
 from kernel_autoupdater.runner import CommandError, CommandRunner
+from kernel_autoupdater.selfupdate import (
+    DEFAULT_REF,
+    SelfUpdateError,
+    run_self_update,
+)
 from kernel_autoupdater.state import State, StateStore
 from kernel_autoupdater.system import (
     SystemCheckError,
@@ -121,6 +126,27 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     auto.add_argument("--dry-run", action="store_true", help="do not change anything")
     auto.set_defaults(func=cmd_auto)
+
+    self_update = subparsers.add_parser(
+        "self-update",
+        aliases=["update-self", "upgrade"],
+        help="update the kau program itself from GitHub",
+    )
+    self_update.add_argument(
+        "--check", action="store_true", help="only check the remote version"
+    )
+    self_update.add_argument(
+        "--force", action="store_true", help="reinstall even if versions match"
+    )
+    self_update.add_argument(
+        "-y", "--yes", action="store_true", help="do not ask for confirmation"
+    )
+    self_update.add_argument(
+        "--ref",
+        default=DEFAULT_REF,
+        help="branch or tag to install (default: master)",
+    )
+    self_update.set_defaults(func=cmd_self_update)
 
     status = subparsers.add_parser("status", help="show updater and kernel status")
     status.add_argument("--json", action="store_true", help="machine-readable output")
@@ -274,6 +300,15 @@ def cmd_auto(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_self_update(args: argparse.Namespace, config: Config) -> int:
+    return run_self_update(
+        ref=args.ref,
+        check_only=args.check,
+        force=args.force,
+        assume_yes=args.yes,
+    )
+
+
 def _systemd_state(runner: CommandRunner, unit: str) -> Optional[str]:
     if not runner.which("systemctl"):
         return None
@@ -404,6 +439,15 @@ def _menu_dry_run(config: Config) -> int:
     )
 
 
+def _menu_self_update(config: Config) -> int:
+    return run_self_update(
+        ref=DEFAULT_REF,
+        check_only=False,
+        force=False,
+        assume_yes=False,
+    )
+
+
 def _menu_update(config: Config) -> int:
     geteuid = getattr(os, "geteuid", None)
     if callable(geteuid) and geteuid() != 0:
@@ -487,6 +531,7 @@ def cmd_menu(args: argparse.Namespace, config: Config) -> int:
         "check": _menu_check,
         "dry_run": _menu_dry_run,
         "update": _menu_update,
+        "self_update": _menu_self_update,
         "status": _menu_status,
         "kernels": _menu_kernels,
         "doctor": _menu_doctor,
@@ -563,6 +608,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         kernelorg.FeedError,
         kernelorg.ReleaseNotFoundError,
         kernelorg.DownloadError,
+        SelfUpdateError,
         VersionError,
         OSError,
     ) as exc:

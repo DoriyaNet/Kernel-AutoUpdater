@@ -26,7 +26,7 @@ class MenuFallbackTests(unittest.TestCase):
             "sys.stdout", io.StringIO()
         ), mock.patch("sys.stderr", stderr):
             code = menu.run_menu(
-                Config(), Path("config.ini"), _noop_actions(), "0.2.0"
+                Config(), Path("config.ini"), _noop_actions(), "0.3.0"
             )
         self.assertEqual(code, 2)
         self.assertIn("terminal", stderr.getvalue())
@@ -37,7 +37,7 @@ class MenuFallbackTests(unittest.TestCase):
             "sys.stdout", _FakeTTY()
         ), mock.patch("sys.stderr", io.StringIO()):
             code = menu.run_menu(
-                Config(), Path("config.ini"), _noop_actions(), "0.2.0"
+                Config(), Path("config.ini"), _noop_actions(), "0.3.0"
             )
         self.assertEqual(code, 2)
 
@@ -46,7 +46,7 @@ class MenuFallbackTests(unittest.TestCase):
             "sys.stdout", io.StringIO()
         ), mock.patch("sys.stderr", io.StringIO()):
             code = menu.run_menu(
-                Config(), Path("config.ini"), _noop_actions(), "0.2.0"
+                Config(), Path("config.ini"), _noop_actions(), "0.3.0"
             )
         self.assertEqual(code, 2)
 
@@ -54,7 +54,7 @@ class MenuFallbackTests(unittest.TestCase):
         with mock.patch("sys.stdin", io.StringIO()), mock.patch(
             "sys.stdout", io.StringIO()
         ), mock.patch("sys.stderr", io.StringIO()):
-            code = menu.run_menu(Config(), Path("config.ini"), {}, "0.2.0")
+            code = menu.run_menu(Config(), Path("config.ini"), {}, "0.3.0")
         self.assertEqual(code, 2)
 
     def test_import_failure_returns_2_on_a_tty(self):
@@ -74,7 +74,7 @@ class MenuFallbackTests(unittest.TestCase):
             "builtins.__import__", side_effect=failing_import
         ):
             code = menu.run_menu(
-                Config(), Path("config.ini"), _noop_actions(), "0.2.0"
+                Config(), Path("config.ini"), _noop_actions(), "0.3.0"
             )
 
         self.assertEqual(code, 2)
@@ -94,7 +94,7 @@ class MenuSaveTests(unittest.TestCase):
             )
 
             self.assertIsNone(new_config)
-            self.assertIn("restored", message)
+            self.assertIn("恢复", message)
             self.assertEqual(path.read_text(encoding="utf-8"), previous)
 
     def test_invalid_value_on_missing_file_removes_created_file(self):
@@ -104,7 +104,7 @@ class MenuSaveTests(unittest.TestCase):
                 Config(), path, _CHANNEL_SETTING, "beta"
             )
             self.assertIsNone(new_config)
-            self.assertIn("restored", message)
+            self.assertIn("恢复", message)
             self.assertFalse(path.exists())
 
     def test_valid_value_is_saved_and_config_is_reloaded(self):
@@ -130,7 +130,7 @@ class MenuSaveTests(unittest.TestCase):
 
             self.assertIsNotNone(new_config)
             self.assertEqual(new_config.localversion, "-new")
-            self.assertIn("Saved", message)
+            self.assertIn("已保存", message)
             self.assertIn(
                 "localversion = -new", path.read_text(encoding="utf-8")
             )
@@ -151,7 +151,7 @@ class MenuSaveTests(unittest.TestCase):
                 )
 
             self.assertIsNone(new_config)
-            self.assertIn("Cannot save", message)
+            self.assertIn("无法保存", message)
             self.assertIn("permission denied", message)
             self.assertEqual(path.read_text(encoding="utf-8"), previous)
 

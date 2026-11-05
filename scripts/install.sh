@@ -84,6 +84,7 @@ echo "  2. run: kau doctor"
 echo "  3. run: kau check"
 echo "  4. preview: kau update --dry-run"
 echo "  5. edit: /etc/kernel-autoupdater/config.ini"
+echo "  6. later: kau self-update --check"
 echo
 echo "Automatic installs stay disabled until auto_update = true."
 

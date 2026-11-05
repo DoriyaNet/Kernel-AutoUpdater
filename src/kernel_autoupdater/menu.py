@@ -27,6 +27,7 @@ REQUIRED_ACTIONS: Tuple[str, ...] = (
     "check",
     "dry_run",
     "update",
+    "self_update",
     "status",
     "kernels",
     "doctor",
@@ -36,22 +37,23 @@ REQUIRED_ACTIONS: Tuple[str, ...] = (
 )
 
 _MAIN_ENTRIES: Tuple[Tuple[str, str], ...] = (
-    ("Check for updates", "check"),
-    ("Preview update (dry-run)", "dry_run"),
-    ("Install update now", "update"),
-    ("Settings", "settings"),
-    ("Doctor", "doctor"),
-    ("Status", "status"),
-    ("Installed kernels", "kernels"),
-    ("Enable timer", "enable"),
-    ("Disable timer", "disable"),
-    ("View log", "log"),
-    ("Quit", "quit"),
+    ("检查内核更新", "check"),
+    ("预览内核更新（dry-run）", "dry_run"),
+    ("立即安装内核更新", "update"),
+    ("程序自更新", "self_update"),
+    ("设置", "settings"),
+    ("环境自检（doctor）", "doctor"),
+    ("运行状态", "status"),
+    ("已安装内核", "kernels"),
+    ("启用定时器", "enable"),
+    ("停用定时器", "disable"),
+    ("查看日志", "log"),
+    ("退出", "quit"),
 )
 
-_MAIN_INSTRUCTIONS = "Up/Down or j/k: move   Enter: select   q: quit"
-_SETTINGS_INSTRUCTIONS = "Enter: edit/toggle   Up/Down or j/k: move   Esc/q: back"
-_CHANNEL_INSTRUCTIONS = "Enter: select   Up/Down or j/k: move   Esc/q: back"
+_MAIN_INSTRUCTIONS = "↑/↓ 或 j/k 移动   Enter 选择   q 退出"
+_SETTINGS_INSTRUCTIONS = "Enter 编辑/切换   ↑/↓ 或 j/k 移动   Esc/q 返回"
+_CHANNEL_INSTRUCTIONS = "Enter 选择   ↑/↓ 或 j/k 移动   Esc/q 返回"
 
 
 @dataclass(frozen=True)
@@ -64,64 +66,64 @@ class _Setting:
 
 
 _SETTINGS: Tuple[_Setting, ...] = (
-    _Setting("Channel", "updater", "channel", "channel", "channel"),
-    _Setting("Auto update", "updater", "auto_update", "bool", "auto_update"),
-    _Setting("Auto reboot", "updater", "auto_reboot", "bool", "auto_reboot"),
+    _Setting("更新通道", "updater", "channel", "channel", "channel"),
+    _Setting("自动更新内核", "updater", "auto_update", "bool", "auto_update"),
+    _Setting("自动重启", "updater", "auto_reboot", "bool", "auto_reboot"),
     _Setting(
-        "Reboot delay (minutes)",
+        "重启延迟（分钟）",
         "updater",
         "reboot_delay_minutes",
         "int",
         "reboot_delay_minutes",
     ),
-    _Setting("Minimum free space (GB)", "updater", "min_free_gb", "int", "min_free_gb"),
-    _Setting("Feed URL", "updater", "feed_url", "text", "feed_url"),
-    _Setting("Feed timeout (seconds)", "updater", "feed_timeout", "int", "feed_timeout"),
+    _Setting("最低剩余空间（GB）", "updater", "min_free_gb", "int", "min_free_gb"),
+    _Setting("更新源 URL", "updater", "feed_url", "text", "feed_url"),
+    _Setting("更新源超时（秒）", "updater", "feed_timeout", "int", "feed_timeout"),
     _Setting(
-        "Download timeout (seconds)",
+        "下载超时（秒）",
         "updater",
         "download_timeout",
         "int",
         "download_timeout",
     ),
-    _Setting("Work directory", "updater", "work_dir", "text", "work_dir"),
-    _Setting("Log file (none = off)", "updater", "log_file", "text", "log_file"),
-    _Setting("Verify PGP signatures", "source", "verify_pgp", "bool", "verify_pgp"),
+    _Setting("工作目录", "updater", "work_dir", "text", "work_dir"),
+    _Setting("日志文件（none = 关闭）", "updater", "log_file", "text", "log_file"),
+    _Setting("验证 PGP 签名", "source", "verify_pgp", "bool", "verify_pgp"),
     _Setting(
-        "Allow unverified sources",
+        "允许未校验源码",
         "source",
         "allow_unverified",
         "bool",
         "allow_unverified",
     ),
-    _Setting("PGP keyring", "source", "pgp_keyring", "text", "pgp_keyring"),
-    _Setting("Patches directory", "source", "patches_dir", "text", "patches_dir"),
-    _Setting("Kernel config source", "build", "config_source", "text", "config_source"),
-    _Setting("Local version", "build", "localversion", "text", "localversion"),
-    _Setting("Build jobs (0 = auto)", "build", "jobs", "int", "jobs"),
+    _Setting("PGP 公钥环", "source", "pgp_keyring", "text", "pgp_keyring"),
+    _Setting("补丁目录", "source", "patches_dir", "text", "patches_dir"),
+    _Setting("内核配置来源", "build", "config_source", "text", "config_source"),
+    _Setting("本地版本后缀", "build", "localversion", "text", "localversion"),
+    _Setting("编译任务数（0 = 自动）", "build", "jobs", "int", "jobs"),
     _Setting(
-        "Keep build directory",
+        "保留编译目录",
         "build",
         "keep_build_dir",
         "bool",
         "keep_build_dir",
     ),
     _Setting(
-        "Clear distro signing keys",
+        "清理发行版签名密钥",
         "build",
         "clear_distro_keys",
         "bool",
         "clear_distro_keys",
     ),
     _Setting(
-        "Update initramfs",
+        "更新 initramfs",
         "install",
         "update_initramfs",
         "bool",
         "update_initramfs",
     ),
     _Setting(
-        "Update bootloader",
+        "更新 bootloader",
         "install",
         "update_bootloader",
         "bool",
@@ -129,13 +131,19 @@ _SETTINGS: Tuple[_Setting, ...] = (
     ),
 )
 
-_CHANNEL_SETTING = _Setting("Channel", "updater", "channel", "channel", "channel")
+_CHANNEL_SETTING = _Setting("更新通道", "updater", "channel", "channel", "channel")
 _CHANNEL_CHOICES: Tuple[str, ...] = (
     "stable",
     "longterm",
     "mainline",
     "longterm:6.12",
 )
+_CHANNEL_LABELS = {
+    "stable": "稳定版 stable",
+    "longterm": "长期支持 longterm",
+    "mainline": "主线 mainline",
+    "longterm:6.12": "LTS 6.12",
+}
 
 
 def _stream_is_tty(stream) -> bool:
@@ -156,24 +164,24 @@ def _is_root() -> bool:
 
 
 def _on_off(value: bool) -> str:
-    return "on" if value else "off"
+    return "开" if value else "关"
 
 
 def _header_lines(config: Config, config_path: Path, version: str) -> List[str]:
     lines = [
         "Kernel AutoUpdater {}".format(version),
-        "Running kernel: {}".format(running_kernel()),
-        "Channel: {}   Auto update: {}   Auto reboot: {}".format(
+        "运行内核: {}".format(running_kernel()),
+        "更新通道: {}   自动更新: {}   自动重启: {}".format(
             config.channel,
             _on_off(config.auto_update),
             _on_off(config.auto_reboot),
         ),
-        "Config: {}".format(config_path),
+        "配置文件: {}".format(config_path),
     ]
     if _is_root():
-        lines.append("Privileges: root")
+        lines.append("权限: root")
     else:
-        lines.append("WARNING: running as non-root; install actions may fail.")
+        lines.append("警告: 当前不是 root，安装与保存配置可能失败。")
     return lines
 
 
@@ -191,7 +199,7 @@ def _safe_addstr(
         return
     try:
         stdscr.addnstr(row, column, text, available, attr)
-    except curses.error:
+    except (curses.error, UnicodeEncodeError):
         pass
 
 
@@ -257,7 +265,7 @@ def _draw_screen(
 
     try:
         stdscr.refresh()
-    except curses.error:
+    except (curses.error, UnicodeEncodeError):
         pass
 
 
@@ -266,10 +274,10 @@ def _format_setting(config: Config, setting: _Setting) -> str:
     if value is None:
         shown = "none"
     elif setting.kind == "bool":
-        shown = "[on]" if value else "[off]"
+        shown = "[开]" if value else "[关]"
     else:
         shown = str(value)
-    return "{:<30} {}".format(setting.label, shown)
+    return "{:<34} {}".format(setting.label, shown)
 
 
 def _leave_curses(curses, stdscr) -> None:
@@ -329,24 +337,24 @@ def _run_action(curses, stdscr, callback: Action, config: Config) -> int:
             except (TypeError, ValueError):
                 code = 1
                 print()
-                print("Warning: action returned an invalid status.")
+                print("警告: 动作返回了无效状态。")
             else:
                 if code not in (0, 10):
                     print()
-                    print("Warning: action exited with status {}.".format(code))
+                    print("警告: 动作退出状态 {}。".format(code))
         except KeyboardInterrupt:
             code = 130
             print()
-            print("Action interrupted.")
+            print("动作已中断。")
         except Exception as exc:
             code = 1
             print()
-            print("Action failed: {}".format(exc))
+            print("动作失败: {}".format(exc))
 
         print()
         sys.stdout.flush()
         try:
-            input("Press Enter to return to the menu...")
+            input("按 Enter 返回菜单...")
         except (EOFError, KeyboardInterrupt):
             pass
     finally:
@@ -376,19 +384,19 @@ def _save_setting(
     try:
         previous_text = read_config_text(path)
     except OSError as exc:
-        return None, "Cannot read {}: {}".format(path, exc)
+        return None, "无法读取 {}: {}".format(path, exc)
 
     try:
         new_text = set_value(
             previous_text, setting.section, setting.key, value
         )
     except ValueError as exc:
-        return None, "Invalid setting: {}".format(exc)
+        return None, "无效设置: {}".format(exc)
 
     try:
         write_config_atomic(path, new_text)
     except OSError as exc:
-        return None, "Cannot save {}: {} (try running as root).".format(path, exc)
+        return None, "无法保存 {}: {}（请尝试 root）。".format(path, exc)
 
     try:
         new_config = Config.load(path, explicit=True)
@@ -396,33 +404,34 @@ def _save_setting(
         if _restore_config_file(path, previous_text, existed):
             return (
                 None,
-                "Invalid value for {}.{}: {}. Previous configuration restored.".format(
+                "配置值 {}.{} 无效: {}。已恢复原配置。".format(
                     setting.section, setting.key, exc
                 ),
             )
         return (
             None,
-            "Invalid value for {}.{}: {}. The previous file could not be "
-            "restored.".format(setting.section, setting.key, exc),
+            "配置值 {}.{} 无效: {}。原配置文件无法恢复。".format(
+                setting.section, setting.key, exc
+            ),
         )
-    return new_config, "Saved {}.{}.".format(setting.section, setting.key)
+    return new_config, "已保存 {}.{}。".format(setting.section, setting.key)
 
 
 def _validate_setting_value(
     setting: _Setting, value: str
 ) -> Tuple[Optional[str], Optional[str]]:
     if "\n" in value or "\r" in value:
-        return None, "{} must be a single line.".format(setting.label)
+        return None, "{} 必须是单行文本。".format(setting.label)
     if setting.kind == "int":
         try:
             number = int(value)
         except ValueError:
-            return None, "{} must be an integer.".format(setting.label)
+            return None, "{} 必须是整数。".format(setting.label)
         if number < 0:
-            return None, "{} must be 0 or greater.".format(setting.label)
+            return None, "{} 必须大于或等于 0。".format(setting.label)
         return str(number), None
     if setting.key == "config_source" and not value.strip():
-        return None, "Kernel config source must not be empty."
+        return None, "内核配置来源不能为空。"
     return value, None
 
 
@@ -433,7 +442,7 @@ def _channel_selector(
     config_path: Path,
     version: str,
 ) -> Tuple[Config, str]:
-    custom_label = "Custom..."
+    custom_label = "自定义..."
     if config.channel in _CHANNEL_CHOICES:
         selected = _CHANNEL_CHOICES.index(config.channel)
     else:
@@ -443,10 +452,11 @@ def _channel_selector(
     while True:
         items: List[str] = []
         for choice in _CHANNEL_CHOICES:
-            suffix = "  (current)" if choice == config.channel else ""
-            items.append(choice + suffix)
+            suffix = "  (当前)" if choice == config.channel else ""
+            label = _CHANNEL_LABELS.get(choice, choice)
+            items.append("{}  [{}]{}".format(label, choice, suffix))
         custom_suffix = (
-            "  (current)" if config.channel not in _CHANNEL_CHOICES else ""
+            "  (当前)" if config.channel not in _CHANNEL_CHOICES else ""
         )
         items.append(custom_label + custom_suffix)
 
@@ -454,7 +464,7 @@ def _channel_selector(
             curses,
             stdscr,
             _header_lines(config, config_path, version),
-            "Settings > Channel",
+            "设置 > 更新通道",
             items,
             selected,
             _CHANNEL_INSTRUCTIONS,
@@ -486,7 +496,7 @@ def _channel_selector(
                 curses, stdscr, "updater.channel", config.channel
             )
             if value is None:
-                message = "Edit cancelled."
+                message = "已取消编辑。"
                 continue
 
         new_config, result_message = _save_setting(
@@ -495,7 +505,7 @@ def _channel_selector(
         if new_config is None:
             message = result_message
             continue
-        return new_config, "Channel set to {}.".format(value)
+        return new_config, "更新通道已设为 {}。".format(value)
 
 
 def _settings_loop(
@@ -514,7 +524,7 @@ def _settings_loop(
             curses,
             stdscr,
             _header_lines(config, config_path, version),
-            "Settings - changes are saved immediately",
+            "设置（修改立即保存）",
             items,
             selected,
             _SETTINGS_INSTRUCTIONS,
@@ -568,7 +578,7 @@ def _settings_loop(
             current,
         )
         if value is None:
-            message = "Edit cancelled."
+            message = "已取消编辑。"
             continue
 
         normalized, error = _validate_setting_value(setting, value)
@@ -614,7 +624,7 @@ def _run_curses(
             curses,
             stdscr,
             _header_lines(config, config_path, version),
-            "Main menu",
+            "主菜单",
             labels,
             selected,
             _MAIN_INSTRUCTIONS,
@@ -652,7 +662,7 @@ def _run_curses(
         message = (
             ""
             if code in (0, 10)
-            else "Action exited with status {}.".format(code)
+            else "动作退出状态 {}。".format(code)
         )
 
 
@@ -670,8 +680,7 @@ def run_menu(
 
     if not _stream_is_tty(sys.stdin) or not _stream_is_tty(sys.stdout):
         print(
-            "The interactive menu requires a terminal (stdin and stdout must "
-            "be a TTY).",
+            "交互菜单需要真实终端 (terminal)，stdin 和 stdout 必须都是 TTY。",
             file=sys.stderr,
         )
         return 2
@@ -680,8 +689,7 @@ def run_menu(
         import curses
     except Exception as exc:
         print(
-            "The interactive menu is unavailable: {}. Use the kau subcommands "
-            "instead.".format(exc),
+            "交互菜单不可用 (unavailable): {}。请改用 kau 子命令。".format(exc),
             file=sys.stderr,
         )
         return 2
@@ -689,8 +697,7 @@ def run_menu(
     missing = [key for key in REQUIRED_ACTIONS if key not in actions]
     if missing:
         print(
-            "The interactive menu is not configured correctly; missing "
-            "actions: {}.".format(", ".join(missing)),
+            "交互菜单配置错误；缺少动作: {}。".format(", ".join(missing)),
             file=sys.stderr,
         )
         return 2
@@ -710,7 +717,7 @@ def run_menu(
         return 130
     except curses.error as exc:
         print(
-            "The interactive menu could not start: {}".format(exc),
+            "交互菜单无法启动: {}".format(exc),
             file=sys.stderr,
         )
         return 2

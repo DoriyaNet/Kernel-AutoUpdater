@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from kernel_autoupdater.cli import cmd_check, cmd_kernels, cmd_status, main
+from kernel_autoupdater.cli import cmd_check, cmd_kernels, cmd_menu, cmd_status, main
 from kernel_autoupdater.config import Config
 from kernel_autoupdater.kernelorg import _parse_feed
 
@@ -110,6 +110,32 @@ class CliTests(unittest.TestCase):
             with patch("kernel_autoupdater.menu.run_menu", return_value=7):
                 code = main(["--config", str(config_path), "menu"])
             self.assertEqual(code, 7)
+
+    def test_self_update_subcommand(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = make_config(temp)
+            with patch(
+                "kernel_autoupdater.cli.run_self_update", return_value=10
+            ) as run:
+                code = main(
+                    ["--config", str(config_path), "self-update", "--check"]
+                )
+            self.assertEqual(code, 10)
+            run.assert_called_once_with(
+                ref="master", check_only=True, force=False, assume_yes=False
+            )
+
+    def test_menu_wires_self_update_action(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Config.load(make_config(temp), explicit=True)
+            with patch(
+                "kernel_autoupdater.menu.run_menu", return_value=0
+            ) as run:
+                code = cmd_menu(SimpleNamespace(), config)
+            self.assertEqual(code, 0)
+            actions = run.call_args[0][2]
+            self.assertIn("self_update", actions)
+            self.assertIn("update", actions)
 
 
 if __name__ == "__main__":

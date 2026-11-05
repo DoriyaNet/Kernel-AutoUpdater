@@ -21,6 +21,7 @@ stable / longterm 内核，下载并校验源码，沿用当前内核的 `.confi
 - systemd timer 每日检查；`auto_update` 控制是否无人值守安装
 - 文件锁防止并发更新；失败时写入状态与日志
 - 一键安装；`kau` / `kmenu` 打开交互菜单，常用配置可直接在 TUI 中修改
+- 菜单内置程序自更新，可从 GitHub 升级 `kau` 本身
 - `--dry-run`、`doctor`、`check --json`，方便先验证再上线
 
 ## 支持范围
@@ -104,6 +105,7 @@ sudo kau tui    # 别名
 菜单内置：
 
 - 检查更新、预览更新（dry-run）、立即安装
+- 程序自更新（更新 `kau` 本身）
 - 状态、已安装内核、doctor 自检、日志查看
 - 启用 / 停用 systemd timer
 - 编辑常用配置：channel、auto_update、auto_reboot、超时、工作目录、日志路径、
@@ -115,7 +117,8 @@ sudo kau tui    # 别名
 curses，任务结束后按 Enter 返回菜单。
 
 菜单需要真实 TTY（Linux 终端 / SSH）；非 TTY 或没有 `curses` 时会返回明确错误，
-仍可使用普通子命令。
+仍可使用普通子命令。中文界面需要 UTF-8 locale；如出现乱码可先执行
+`export LANG=C.UTF-8`。
 
 ## 首次更新
 
@@ -213,6 +216,7 @@ Debian / Ubuntu 的内核配置会引用发行版签名密钥路径，而原版 
 | 命令 | 说明 |
 | --- | --- |
 | `kau` / `kmenu` / `kau menu` | 打开交互式 TUI 菜单 |
+| `kau self-update [--check] [--force] [--yes] [--ref REF]` | 更新 `kau` 程序本身 |
 | `kau check [--json] [--offline]` | 检查新版本；有更新时退出码为 `10` |
 | `kau update [--to VERSION] [--dry-run] [-y] [--force] [--reboot]` | 构建并安装 |
 | `kau auto [--dry-run]` | systemd 调用；受 `auto_update` 控制 |
@@ -234,12 +238,31 @@ Debian / Ubuntu 的内核配置会引用发行版签名密钥路径，而原版 
 
 下载的源码包保存在 `work_dir/downloads/`，不会自动删除；请按需清理。
 
+### 程序自更新
+
+菜单中的“程序自更新”会读取 GitHub `master`（或指定 ref）的 `pyproject.toml`
+版本号，下载源码包并运行安装脚本更新 `/usr/local/bin/kau`。它需要 root，并会保留
+现有配置和 timer 的启用状态。命令行用法：
+
+```bash
+sudo kau self-update --check     # 只检查；有新版本时退出码 10
+sudo kau self-update             # 检查并确认更新
+sudo kau self-update --force     # 版本相同也重新安装
+sudo kau self-update --ref master
+```
+
+自更新下载来自 GitHub 的 HTTPS 源码包，当前不额外校验发布签名；如果网络需要通过
+代理访问 GitHub，可设置 `HTTPS_PROXY` / `HTTP_PROXY` 环境变量。
+
+自更新按照 `install.sh` 的安装布局工作（`/usr/local/bin/kau`、systemd 单元等）。
+如果你是通过 `pip install` 安装的，请使用 `pip` 升级。
+
 退出码：
 
 - `0`：成功 / 无可用更新
 - `1`：更新或检查失败
 - `2`：参数或配置错误
-- `10`：`check` 发现可用更新
+- `10`：`check` 或 `self-update --check` 发现可用更新
 
 ## 回滚
 

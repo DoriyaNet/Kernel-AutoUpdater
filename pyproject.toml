@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kernel-autoupdater"
-version = "0.2.0"
+version = "0.3.0"
 description = "Safely build and install new Linux kernels from kernel.org"
 readme = "README.md"
 requires-python = ">=3.9"
