@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodically check for new Linux kernels
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1d
+RandomizedDelaySec=2h
+AccuracySec=5min
+Persistent=true
+Unit=kernel-autoupdater.service
+
+[Install]
+WantedBy=timers.target
+

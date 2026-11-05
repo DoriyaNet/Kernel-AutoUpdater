@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kernel-autoupdater"
+version = "0.1.0"
+description = "Safely build and install new Linux kernels from kernel.org"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+kau = "kernel_autoupdater.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

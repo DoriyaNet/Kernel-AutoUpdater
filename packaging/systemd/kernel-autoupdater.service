@@ -1,0 +1,19 @@
+[Unit]
+Description=Kernel AutoUpdater
+Documentation=file:/usr/local/share/doc/kernel-autoupdater/README.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/local/bin/kau
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/kau auto
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=50
+TimeoutStartSec=6h
+SuccessExitStatus=10
+
+[Install]
+WantedBy=multi-user.target
+
