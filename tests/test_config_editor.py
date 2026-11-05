@@ -15,6 +15,7 @@ from kernel_autoupdater.config_editor import (
 class ConfigEditorTests(unittest.TestCase):
     def test_default_config_is_valid_and_has_all_editable_options(self):
         expected = [
+            ("updater", "update_method"),
             ("updater", "channel"),
             ("updater", "auto_update"),
             ("updater", "auto_reboot"),
@@ -34,6 +35,10 @@ class ConfigEditorTests(unittest.TestCase):
             ("build", "jobs"),
             ("build", "keep_build_dir"),
             ("build", "clear_distro_keys"),
+            ("packages", "manager"),
+            ("packages", "kernel_packages"),
+            ("packages", "refresh_package_index"),
+            ("packages", "min_free_gb"),
             ("install", "update_initramfs"),
             ("install", "update_bootloader"),
         ]
@@ -42,6 +47,7 @@ class ConfigEditorTests(unittest.TestCase):
             path.write_text(DEFAULT_CONFIG_TEXT, encoding="utf-8")
             config = Config.load(path, explicit=True)
         self.assertEqual(config.channel, "stable")
+        self.assertEqual(config.update_method, "build")
         for section, key in expected:
             with self.subTest(section=section, key=key):
                 self.assertIsNotNone(get_value(DEFAULT_CONFIG_TEXT, section, key))

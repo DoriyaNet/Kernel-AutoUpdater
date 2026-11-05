@@ -7,9 +7,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from kernel_autoupdater.cli import cmd_check, cmd_kernels, cmd_menu, cmd_status, main
+from kernel_autoupdater.builder import CheckResult
+from kernel_autoupdater.cli import (
+    cmd_auto,
+    cmd_check,
+    cmd_kernels,
+    cmd_menu,
+    cmd_status,
+    main,
+)
 from kernel_autoupdater.config import Config
-from kernel_autoupdater.kernelorg import _parse_feed
+from kernel_autoupdater.kernelorg import KernelRelease, _parse_feed
+from kernel_autoupdater.packages import PackageUpdate
 
 from tests.test_kernelorg import sample_payload
 
@@ -64,6 +73,142 @@ class CliTests(unittest.TestCase):
             payload = json.loads(output.getvalue())
             self.assertEqual(payload["channel"], "stable")
             self.assertEqual(payload["installed"], [])
+
+    def test_package_check_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Config.load(make_config(temp), explicit=True)
+            package = PackageUpdate(
+                manager="apt",
+                packages=("linux-image-generic",),
+                installed_version="6.8.0-79.79",
+                candidate_version="6.8.0-80.80",
+                kernel_version="6.8.0",
+                update_available=True,
+            )
+            check = CheckResult(
+                current="6.8.0-79-generic",
+                current_base="6.8.0",
+                channel="package:apt",
+                latest=KernelRelease(
+                    version="6.8.0-80.80",
+                    moniker="apt",
+                    source=package.description,
+                ),
+                update_available=True,
+                method="package",
+                package=package,
+            )
+            output = io.StringIO()
+            with patch(
+                "kernel_autoupdater.cli.check_package_update",
+                return_value=check,
+            ):
+                with redirect_stdout(output):
+                    code = cmd_check(
+                        SimpleNamespace(
+                            json=True, offline=False, method="package"
+                        ),
+                        config,
+                    )
+            self.assertEqual(code, 10)
+            payload = json.loads(output.getvalue())
+            self.assertEqual(payload["method"], "package")
+            self.assertEqual(payload["package_manager"], "apt")
+            self.assertEqual(payload["package_candidate"], "6.8.0-80.80")
+
+    def test_package_auto_does_not_fetch_kernelorg(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = make_config(temp)
+            text = config_path.read_text(encoding="utf-8")
+            config_path.write_text(
+                text.replace(
+                    "[updater]\n", "[updater]\nupdate_method = package\n"
+                ),
+                encoding="utf-8",
+            )
+            config = Config.load(config_path, explicit=True)
+            package = PackageUpdate(
+                manager="apt",
+                packages=("linux-image-generic",),
+                installed_version="6.8.0-79.79",
+                candidate_version="6.8.0-80.80",
+                kernel_version="6.8.0",
+                update_available=True,
+            )
+            check = CheckResult(
+                current="6.8.0-79-generic",
+                current_base="6.8.0",
+                channel="package:apt",
+                latest=KernelRelease(
+                    version="6.8.0-80.80",
+                    moniker="apt",
+                    source=package.description,
+                ),
+                update_available=True,
+                method="package",
+                package=package,
+            )
+            with patch(
+                "kernel_autoupdater.cli.check_package_update",
+                return_value=check,
+            ), patch("kernel_autoupdater.cli._fetch_feed") as fetch:
+                code = cmd_auto(
+                    SimpleNamespace(dry_run=False, method=None), config
+                )
+            self.assertEqual(code, 0)
+            fetch.assert_not_called()
+
+    def test_package_update_dry_run_skips_install(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = make_config(temp)
+            text = config_path.read_text(encoding="utf-8")
+            config_path.write_text(
+                text.replace(
+                    "[updater]\n", "[updater]\nupdate_method = package\n"
+                ),
+                encoding="utf-8",
+            )
+            config = Config.load(config_path, explicit=True)
+            package = PackageUpdate(
+                manager="apt",
+                packages=("linux-image-generic",),
+                installed_version="6.8.0-79.79",
+                candidate_version="6.8.0-80.80",
+                kernel_version="6.8.0",
+                update_available=True,
+            )
+
+            class Backend:
+                name = "apt"
+                packages = ("linux-image-generic",)
+
+                def inspect(self, current):
+                    return package
+
+                def install_command(self):
+                    return ["apt-get", "install", "linux-image-generic"]
+
+                def install(self):
+                    raise AssertionError("dry-run must not install")
+
+            with patch(
+                "kernel_autoupdater.builder.distro_packages.build_backend",
+                return_value=Backend(),
+            ), patch(
+                "kernel_autoupdater.builder.running_kernel",
+                return_value="6.8.0-79-generic",
+            ):
+                code = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "update",
+                        "--dry-run",
+                        "--method",
+                        "package",
+                    ]
+                )
+            self.assertEqual(code, 0)
 
     def test_main_check_exit_code(self):
         with tempfile.TemporaryDirectory() as temp:

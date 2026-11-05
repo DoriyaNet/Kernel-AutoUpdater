@@ -5,6 +5,7 @@ from __future__ import annotations
 import configparser
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -55,6 +56,7 @@ def _as_path(value: str, key: str) -> Path:
 class Config:
     source_path: Optional[Path] = None
     channel: str = "stable"
+    update_method: str = "build"
     feed_url: str = DEFAULT_FEED_URL
     feed_timeout: int = 30
     download_timeout: int = 120
@@ -73,6 +75,10 @@ class Config:
     jobs: int = 0
     keep_build_dir: bool = False
     clear_distro_keys: bool = True
+    package_manager: str = "auto"
+    kernel_packages: str = "auto"
+    refresh_package_index: bool = True
+    package_min_free_gb: int = 2
     update_initramfs: bool = True
     update_bootloader: bool = True
 
@@ -108,6 +114,16 @@ class Config:
             Channel.parse(self.channel)
         except VersionError as exc:
             raise ConfigError(str(exc)) from exc
+
+        self.update_method = self._get(
+            parser, "updater", "update_method", self.update_method
+        ).strip().lower()
+        if self.update_method not in ("build", "package"):
+            raise ConfigError(
+                "updater.update_method must be build or package, got {!r}".format(
+                    self.update_method
+                )
+            )
 
         self.feed_url = self._get(parser, "updater", "feed_url", self.feed_url).strip()
         if not self.feed_url:
@@ -194,6 +210,60 @@ class Config:
             "build.clear_distro_keys",
         )
 
+        self.package_manager = self._get(
+            parser, "packages", "manager", self.package_manager
+        ).strip().lower()
+        if self.package_manager not in ("auto", "apt", "dnf"):
+            raise ConfigError(
+                "packages.manager must be auto, apt or dnf, got {!r}".format(
+                    self.package_manager
+                )
+            )
+        self.kernel_packages = self._get(
+            parser, "packages", "kernel_packages", self.kernel_packages
+        ).strip()
+        if not self.kernel_packages:
+            raise ConfigError("packages.kernel_packages must not be empty")
+        if any(char in self.kernel_packages for char in "\r\n"):
+            raise ConfigError("packages.kernel_packages must be a single line")
+        if self.kernel_packages.lower() != "auto":
+            names = [
+                item
+                for item in re.split(r"[\s,]+", self.kernel_packages)
+                if item
+            ]
+            if not names:
+                raise ConfigError("packages.kernel_packages must not be empty")
+            invalid = [
+                item
+                for item in names
+                if not re.match(r"^[A-Za-z0-9][A-Za-z0-9+._:-]*$", item)
+            ]
+            if invalid:
+                raise ConfigError(
+                    "packages.kernel_packages contains invalid names: {}".format(
+                        ", ".join(invalid)
+                    )
+                )
+        self.refresh_package_index = _as_bool(
+            self._get(
+                parser,
+                "packages",
+                "refresh_package_index",
+                str(self.refresh_package_index),
+            ),
+            "packages.refresh_package_index",
+        )
+        self.package_min_free_gb = _as_int(
+            self._get(
+                parser,
+                "packages",
+                "min_free_gb",
+                str(self.package_min_free_gb),
+            ),
+            "packages.min_free_gb",
+        )
+
         self.update_initramfs = _as_bool(
             self._get(
                 parser, "install", "update_initramfs", str(self.update_initramfs)
@@ -207,7 +277,7 @@ class Config:
             "install.update_bootloader",
         )
 
-        known_sections = {"updater", "source", "build", "install"}
+        known_sections = {"updater", "source", "build", "packages", "install"}
         for section in parser.sections():
             if section not in known_sections:
                 LOGGER.warning("ignoring unknown config section [%s]", section)

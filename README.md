@@ -1,13 +1,21 @@
 # Kernel AutoUpdater
 
-`kau` 是一个面向 Linux 自托管内核的 CLI 自动更新器。它会从 kernel.org 检查新的
-stable / longterm 内核，下载并校验源码，沿用当前内核的 `.config` 重新编译，安装
-新内核并刷新 initramfs / GRUB，同时保留旧内核用于回滚。
+`kau` 是一个面向 Linux 内核的 CLI 自动更新器，提供两种更新方式：
+
+- **build（默认）**：从 kernel.org 检查 stable / longterm 内核，下载并校验源码，
+  沿用当前内核的 `.config` 在本机编译，再安装并刷新 initramfs / GRUB。
+- **package**：直接使用发行版仓库（apt / dnf）里的预编译内核包，不下载内核源码、
+  不占编译所需的 CPU / 内存，由发行版包管理器完成安装、initramfs 和引导项更新。
+
+两种方式都会保留旧内核用于回滚。
 
 > **重要：** 本工具直接执行 `make install`，不经过发行版包管理器；默认也不签名
 > 内核。首次使用请先执行 `kau update --dry-run`，并确保你有控制台 / 救援模式，
 > 可以在新内核无法启动时选择旧内核。UEFI Secure Boot 开启时，未签名内核无法启动，
 > 工具会默认拒绝更新。
+
+> 上述 `make install`、未签名和 Secure Boot 限制仅针对 `build` 模式。`package`
+> 模式调用 `apt-get` / `dnf`，使用发行版签名内核，不执行本地编译。
 
 ## 功能
 
@@ -17,12 +25,53 @@ stable / longterm 内核，下载并校验源码，沿用当前内核的 `.confi
 - 从当前运行内核同步 `.config`，执行 `make olddefconfig` 后构建
 - 支持本地补丁目录，按文件名顺序应用 `*.patch` / `*.diff`
 - `make modules_install && make install`，自动刷新 initramfs 和 GRUB
+- 可选从 apt / dnf 仓库安装发行版预编译内核，避免本机编译的资源开销
 - 保留所有旧内核；记录由 `kau` 安装的版本，便于确认
 - systemd timer 每日检查；`auto_update` 控制是否无人值守安装
 - 文件锁防止并发更新；失败时写入状态与日志
 - 一键安装；`kau` / `kmenu` 打开交互菜单，常用配置可直接在 TUI 中修改
 - 菜单内置程序自更新，可从 GitHub 升级 `kau` 本身
 - `--dry-run`、`doctor`、`check --json`，方便先验证再上线
+
+## 更新方式
+
+在 `/etc/kernel-autoupdater/config.ini` 中设置：
+
+```ini
+[updater]
+update_method = build   # build | package
+```
+
+也可以只对单次命令覆盖：
+
+```bash
+sudo kau check --method package
+sudo kau update --method package --dry-run
+sudo kau update --method package -y
+```
+
+| 方式 | 内核来源 | 本机资源 | 适合场景 |
+| --- | --- | --- | --- |
+| `build` | kernel.org 原版源码 | 需要编译工具链，通常 10–60 分钟 CPU 时间 | 需要自定义 `.config`、补丁、`-kau` 后缀或最新主线 |
+| `package` | apt / dnf 发行版仓库 | 只下载二进制包，通常几十秒到几分钟 | 日常安全更新、低配 VPS / 笔记本、希望 Secure Boot 继续使用发行版签名内核 |
+
+`package` 模式使用发行版自己的内核包，因此：
+
+- 内核带发行版后缀（如 `6.8.0-80-generic`），不会追加 `build.localversion`
+- 不应用 `build.config_source` 和 `source.patches_dir`
+- initramfs、GRUB / systemd-boot 由发行版包的 post-install 脚本维护
+- `[install]` 中的 `update_initramfs` / `update_bootloader` 仅对 `build` 模式生效
+- 仓库元数据和软件包签名由 apt / dnf 校验；UEFI Secure Boot 可直接使用发行版签名内核
+- `--to`、`--defconfig`、`--keep-build`、`--jobs` 仅适用于 `build` 模式
+
+`kau check` 使用本机已有的软件源索引，不会主动联网刷新；`kau update` 和
+`kau auto` 在安装前会按 `packages.refresh_package_index` 执行 `apt-get update`
+或 `dnf makecache --refresh`。
+
+`kernel_packages = auto` 在 Ubuntu 上选择 `linux-image-generic` /
+`linux-headers-generic`，在 Debian 上选择 `linux-image-<arch>` /
+`linux-headers-<arch>`。如果你运行的是 `lowlatency`、`aws`、`rt`、`linux-lts`
+等 flavor，请显式设置对应的内核包名。
 
 ## 支持范围
 
@@ -34,11 +83,13 @@ stable / longterm 内核，下载并校验源码，沿用当前内核的 `.confi
 - Arch 等使用 `mkinitcpio` 的系统：会安装内核，但自定义内核需要你自己创建
   mkinitcpio preset；工具会给出警告
 
-内核源码来自 kernel.org 原版，**不会**合并发行版的内核补丁或 ABI 变更。
+`build` 模式的内核源码来自 kernel.org 原版，**不会**合并发行版的内核补丁或 ABI
+变更；需要发行版补丁时改用 `package` 模式。
 
 ## 一键安装
 
-要求：Linux、Python 3.9+、root、`curl` 或 `wget`、至少 12 GiB 空闲磁盘（可在配置中调整）。
+要求：Linux、Python 3.9+、root、`curl` 或 `wget`。`build` 模式至少需要 12 GiB
+空闲磁盘（可配置）；`package` 模式默认只需 2 GiB。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DoriyaNet/Kernel-AutoUpdater/master/install.sh | sudo bash
@@ -108,8 +159,9 @@ sudo kau tui    # 别名
 - 程序自更新（更新 `kau` 本身）
 - 状态、已安装内核、doctor 自检、日志查看
 - 启用 / 停用 systemd timer
-- 编辑常用配置：channel、auto_update、auto_reboot、超时、工作目录、日志路径、
-  PGP 校验、`config_source`、`localversion`、jobs、initramfs / bootloader 等
+- 编辑常用配置：update_method、channel、auto_update、auto_reboot、超时、工作目录、
+  日志路径、PGP 校验、`config_source`、`localversion`、jobs、包管理器 / 内核包、
+  initramfs / bootloader 等
 
 操作：方向键或 `j/k` 移动，`Enter` 选择，`Esc` / `q` 返回，主菜单按 `q` 退出。
 设置修改会立即写入 `/etc/kernel-autoupdater/config.ini`，并保留原有注释；写入后会
@@ -140,12 +192,23 @@ kau status
 首次编译通常需要 10–60 分钟，取决于 CPU 和配置。`jobs = 0` 表示按 CPU 核心数
 并行编译；内存较小的机器请手动降低 `jobs`，避免 OOM。
 
+如果不想编译，可以先试运行并改用发行版包：
+
+```bash
+sudo kau update --method package --dry-run
+sudo kau update --method package -y
+```
+
+包模式下 apt / dnf 会下载并安装发行版内核，耗时主要取决于软件源速度。
+
 ## 配置
 
 配置文件：`/etc/kernel-autoupdater/config.ini`
 
 ```ini
 [updater]
+# build | package
+update_method = build
 # stable | longterm | longterm:6.12 | mainline
 channel = stable
 auto_update = false
@@ -164,6 +227,14 @@ localversion = -kau
 jobs = 0
 keep_build_dir = false
 clear_distro_keys = true
+
+[packages]
+# auto | apt | dnf
+manager = auto
+# auto 会选择 linux-image-generic / linux-image-<arch> 或 kernel
+kernel_packages = auto
+refresh_package_index = true
+min_free_gb = 2
 
 [install]
 update_initramfs = true
@@ -217,12 +288,12 @@ Debian / Ubuntu 的内核配置会引用发行版签名密钥路径，而原版 
 | --- | --- |
 | `kau` / `kmenu` / `kau menu` | 打开交互式 TUI 菜单 |
 | `kau self-update [--check] [--force] [--yes] [--ref REF]` | 更新 `kau` 程序本身 |
-| `kau check [--json] [--offline]` | 检查新版本；有更新时退出码为 `10` |
-| `kau update [--to VERSION] [--dry-run] [-y] [--force] [--reboot]` | 构建并安装 |
-| `kau auto [--dry-run]` | systemd 调用；受 `auto_update` 控制 |
+| `kau check [--json] [--offline] [--method build\|package]` | 检查新版本；有更新时退出码为 `10` |
+| `kau update [--to VERSION] [--dry-run] [-y] [--force] [--reboot] [--method build\|package]` | 编译或安装内核 |
+| `kau auto [--dry-run] [--method build\|package]` | systemd 调用；受 `auto_update` 控制 |
 | `kau status [--json]` | 显示运行内核、配置、状态和 timer |
 | `kau kernels [--json]` | 列出 `/lib/modules` 下的内核，标记当前内核和 kau 安装项 |
-| `kau doctor` | 检查编译依赖、配置来源、磁盘、Secure Boot、PGP 和 timer |
+| `kau doctor [--method build\|package]` | 按更新方式检查依赖、配置/仓库、磁盘、Secure Boot、PGP 和 timer |
 | `kau enable --now` / `kau disable` | 启用 / 停用 systemd timer |
 
 常用参数：
@@ -232,11 +303,17 @@ Debian / Ubuntu 的内核配置会引用发行版签名密钥路径，而原版 
 - `--keep-build`：复用 `work_dir/build/linux-*`，便于失败后继续排查
 - `--defconfig`：本次改用 `make defconfig`
 - `--jobs N`：本次覆盖并行编译数
+- `--method package`：本次改用发行版预编译包（`--method build` 可临时切回源码编译）
 
 成功安装后默认删除编译目录以回收磁盘；失败时会保留，便于排查。若需要保留，
 设置 `keep_build_dir = true` 或使用 `--keep-build`。
 
 下载的源码包保存在 `work_dir/downloads/`，不会自动删除；请按需清理。
+
+`package` 模式下不会使用 `work_dir/downloads`、`build_dir`、补丁目录或
+`min_free_gb`；请改用 `[packages] min_free_gb` 控制所需磁盘空间。apt 默认会
+更新 `linux-image-*` 与 `linux-headers-*` 元包，dnf 默认更新 `kernel` 包。
+如果发行版使用不同的包名（例如 `linux-lts`），设置 `kernel_packages`。
 
 ### 程序自更新
 
@@ -285,6 +362,8 @@ sudo kau update --to 7.3.1 --force
 
 ## 校验与 Secure Boot
 
+以下内容针对 `build` 模式；`package` 模式由 apt / dnf 校验仓库与软件包签名。
+
 默认始终校验 `sha256sums.asc` 中的 SHA-256（HTTPS 传输），但不验证 GPG 签名。
 注意：`sha256sums.asc` 本身由 kernel.org 内部的自动签名密钥签署，官方说明该密钥
 不对外发布，因此它不是用户可独立验证的信任链；真正的发布签名在源码包的
@@ -315,6 +394,8 @@ verify_pgp = true
 
 ## 编译依赖
 
+`package` 模式不需要本节的内核编译工具链，只需要可用的 apt 或 dnf。
+
 Debian / Ubuntu：
 
 ```bash
@@ -333,12 +414,19 @@ sudo dnf install bc flex bison openssl-devel elfutils-libelf-devel dwarves cpio 
 
 ## 限制
 
-- 不合并发行版内核补丁、ABI、DKMS 或第三方模块；需要额外补丁时使用 patches 目录
-- 直接安装到 `/boot` 和 `/lib/modules`，不由 `apt`/`dnf` 管理；升级发行版包时可能
-  产生重复内核
+- `build` 模式不合并发行版内核补丁、ABI、DKMS 或第三方模块；需要额外补丁时使用
+  patches 目录
+- `build` 模式直接安装到 `/boot` 和 `/lib/modules`，不由 `apt`/`dnf` 管理；升级
+  发行版包时可能产生重复内核
+- `package` 模式只能安装发行版仓库已有的内核，无法使用 `--to` 指定任意上游版本，
+  也不应用本地配置和补丁；目前支持 apt 与 dnf，Arch 的 pacman 请继续使用 `build`
+  模式或发行版自己的升级命令
+- `package` 模式会刷新发行版软件源索引；如果仓库中的内核包依赖其他系统包更新，
+  apt / dnf 可能会一并升级这些依赖
 - 不自动删除旧内核；长期使用请自行清理 `/boot`，但要保留至少一个可启动旧内核
 - 工具不修改 `GRUB_DEFAULT`；如果使用 `GRUB_DEFAULT=saved`，请自行把新内核设为默认
-- 不支持给内核做 Secure Boot 签名；需要你自己配置密钥和 `sign-file`
+- `build` 模式不支持给内核做 Secure Boot 签名；需要你自己配置密钥和 `sign-file`。
+  `package` 模式使用发行版的已签名内核
 - mainline / RC 源码通常既没有 `sha256sums.asc` 也没有 `.tar.sign`，必须设置
   `allow_unverified = true` 和 `verify_pgp = false` 才能构建，不建议生产使用
 - 容器、WSL 或没有 `/boot` 的环境无法完成引导更新
@@ -354,6 +442,7 @@ PYTHONPATH=src python -m kernel_autoupdater --help
 
 - `versioning.py`：内核版本解析、排序、channel
 - `kernelorg.py`：release feed、校验和、下载
+- `packages.py`：apt / dnf 预编译内核包与候选版本检查
 - `builder.py`：预检、配置同步、编译、安装、回滚状态
 - `system.py`：发行版 / initramfs / Secure Boot 探测
 - `config.py`、`state.py`：配置与持久化

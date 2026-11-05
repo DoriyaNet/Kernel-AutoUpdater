@@ -82,7 +82,7 @@ echo "Next steps:"
 echo "  1. run: kau        (or kmenu) to open the interactive menu"
 echo "  2. run: kau doctor"
 echo "  3. run: kau check"
-echo "  4. preview: kau update --dry-run"
+echo "  4. preview: kau update --dry-run (or --method package)"
 echo "  5. edit: /etc/kernel-autoupdater/config.ini"
 echo "  6. later: kau self-update --check"
 echo

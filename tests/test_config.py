@@ -9,6 +9,9 @@ class ConfigTests(unittest.TestCase):
     def test_defaults(self):
         config = Config()
         self.assertEqual(config.channel, "stable")
+        self.assertEqual(config.update_method, "build")
+        self.assertEqual(config.package_manager, "auto")
+        self.assertEqual(config.kernel_packages, "auto")
         self.assertFalse(config.auto_update)
         self.assertFalse(config.auto_reboot)
 
@@ -35,6 +38,12 @@ config_source = /tmp/config
 localversion = -test
 jobs = 8
 
+[packages]
+manager = apt
+kernel_packages = linux-image-generic,linux-headers-generic
+refresh_package_index = false
+min_free_gb = 3
+
 [install]
 update_initramfs = false
 update_bootloader = yes
@@ -51,6 +60,13 @@ update_bootloader = yes
         self.assertTrue(config.verify_pgp)
         self.assertEqual(config.localversion, "-test")
         self.assertEqual(config.jobs, 8)
+        self.assertEqual(config.package_manager, "apt")
+        self.assertEqual(
+            config.kernel_packages,
+            "linux-image-generic,linux-headers-generic",
+        )
+        self.assertFalse(config.refresh_package_index)
+        self.assertEqual(config.package_min_free_gb, 3)
         self.assertFalse(config.update_initramfs)
         self.assertTrue(config.update_bootloader)
         self.assertEqual(config.work_dir, Path("/tmp/kau-work"))
@@ -61,6 +77,9 @@ update_bootloader = yes
             "[updater]\nchannel = beta\n",
             "[updater]\nfeed_url =\n",
             "[updater]\nmin_free_gb = -1\n",
+            "[updater]\nupdate_method = compile\n",
+            "[packages]\nmanager = yum\n",
+            "[packages]\nkernel_packages =\n",
             "[build]\njobs = many\n",
         ]
         for text in cases:

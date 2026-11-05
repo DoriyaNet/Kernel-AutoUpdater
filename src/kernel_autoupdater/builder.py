@@ -19,6 +19,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from kernel_autoupdater import kernelorg
+from kernel_autoupdater import packages as distro_packages
 from kernel_autoupdater.config import Config
 from kernel_autoupdater.lock import update_lock
 from kernel_autoupdater.kernelorg import (
@@ -34,6 +35,7 @@ from kernel_autoupdater.system import (
     find_kernel_config,
     free_gb,
     initramfs_exists,
+    installed_module_releases,
     is_linux,
     running_kernel,
     secure_boot_enabled,
@@ -58,6 +60,14 @@ class CheckResult:
     feed_stale: bool = False
     installed_release: Optional[str] = None
     pending_reboot: bool = False
+    method: str = "build"
+    package: Optional[distro_packages.PackageUpdate] = None
+
+    @property
+    def latest_version(self) -> str:
+        if self.package is not None:
+            return self.package.candidate_version
+        return self.latest.version
 
 
 @dataclass
@@ -126,7 +136,144 @@ def check_for_update(
         feed_stale=feed.stale,
         installed_release=installed_release,
         pending_reboot=pending_reboot,
+        method="build",
     )
+
+
+def check_package_update(
+    config: Config,
+    state: State,
+    runner: Optional[CommandRunner] = None,
+    current: Optional[str] = None,
+    backend: Optional[distro_packages.PackageBackend] = None,
+    refresh: bool = False,
+    installed_releases: Optional[Callable[[], list]] = None,
+) -> CheckResult:
+    """Check a distro repository for a prebuilt kernel update."""
+
+    runner = runner or CommandRunner()
+    backend = backend or distro_packages.build_backend(config, runner)
+    current_kernel = current or running_kernel()
+    try:
+        current_version = KernelVersion.parse(current_kernel)
+    except VersionError as exc:
+        raise UpdateError(
+            "cannot parse running kernel release {!r}; this tool is intended "
+            "for Linux hosts".format(current_kernel)
+        ) from exc
+
+    if refresh and not runner.dry_run:
+        backend.refresh()
+    package_update = backend.inspect(current_kernel)
+
+    release = KernelRelease(
+        version=package_update.kernel_version,
+        moniker=package_update.manager,
+        source=package_update.description,
+    )
+    pending_reboot = package_update.pending_reboot
+    update_available = package_update.update_available and not pending_reboot
+
+    installed_release = None
+    if pending_reboot:
+        list_releases = installed_releases or installed_module_releases
+        installed_release = _installed_release_for_package(
+            package_update, list_releases()
+        ) or package_update.installed_version
+    elif state.installed:
+        installed_release = state.installed[0].release
+
+    return CheckResult(
+        current=current_kernel,
+        current_base=str(current_version),
+        channel="package:{}".format(package_update.manager),
+        latest=release,
+        update_available=update_available,
+        installed_release=installed_release,
+        pending_reboot=pending_reboot,
+        method="package",
+        package=package_update,
+    )
+
+
+def _matching_installed_release(
+    kernel_version: str, releases: Optional[list] = None
+) -> Optional[str]:
+    """Pick the newest installed module directory for a kernel base."""
+
+    try:
+        wanted = KernelVersion.parse(kernel_version)
+    except VersionError:
+        return None
+    matches = []
+    for release in releases if releases is not None else installed_module_releases():
+        try:
+            if KernelVersion.parse(release).base == wanted.base:
+                matches.append(release)
+        except VersionError:
+            continue
+    if not matches:
+        return None
+    return max(
+        matches,
+        key=lambda value: (KernelVersion.parse(value).sort_key, value),
+    )
+
+
+def _package_release_prefix(
+    update: distro_packages.PackageUpdate,
+) -> Optional[str]:
+    """Map a package version to the matching /lib/modules prefix.
+
+    ``6.8.0-80.80`` matches ``6.8.0-80-generic`` and
+    ``6.11.4-301.fc41`` matches ``6.11.4-301.fc41.x86_64``.
+    """
+
+    base = update.kernel_version
+    candidate = update.candidate_version.split(":", 1)[-1]
+    if not candidate.startswith(base):
+        return None
+    remainder = candidate[len(base):]
+    if not remainder:
+        return base
+    if remainder.startswith("-"):
+        abi = remainder[1:].split(".", 1)[0]
+        return base + "-" + abi
+    if remainder.startswith("."):
+        parts = [part for part in remainder.split(".") if part]
+        if parts:
+            return base + "-" + parts[0]
+    return base
+
+
+def _installed_release_for_package(
+    update: distro_packages.PackageUpdate,
+    releases: Optional[list] = None,
+) -> Optional[str]:
+    available = list(
+        releases if releases is not None else installed_module_releases()
+    )
+    prefix = _package_release_prefix(update)
+    if prefix:
+        matching = [
+            release
+            for release in available
+            if release == prefix
+            or release.startswith(prefix + "-")
+            or release.startswith(prefix + ".")
+        ]
+        if matching:
+            parsed = []
+            for release in matching:
+                try:
+                    parsed.append(
+                        (KernelVersion.parse(release).sort_key, release)
+                    )
+                except VersionError:
+                    continue
+            if parsed:
+                return max(parsed)[1]
+    return _matching_installed_release(update.kernel_version, available)
 
 
 class Updater:
@@ -181,6 +328,9 @@ class Updater:
         release: Optional[KernelRelease] = None,
         feed: Optional[Feed] = None,
     ) -> UpdateResult:
+        if self.config.update_method == "package":
+            return self._execute_package(options)
+
         if release is None:
             feed = feed or self._load_feed()
             release = self._resolve_release(feed, options)
@@ -233,6 +383,272 @@ class Updater:
             self.state.record_error(str(exc))
             self._save_state()
             raise
+
+    def _execute_package(self, options: UpdateOptions) -> UpdateResult:
+        incompatible = []
+        if options.target:
+            incompatible.append("--to")
+        if options.defconfig:
+            incompatible.append("--defconfig")
+        if options.keep_build:
+            incompatible.append("--keep-build")
+        if options.jobs is not None:
+            incompatible.append("--jobs")
+        if incompatible:
+            raise UpdateError(
+                "{} only apply to source builds; remove them or use "
+                "update_method = build".format(", ".join(incompatible))
+            )
+
+        try:
+            current_version = KernelVersion.parse(self.current)
+        except VersionError as exc:
+            raise UpdateError(
+                "cannot parse running kernel release {!r}; this tool is "
+                "intended for Linux hosts".format(self.current)
+            ) from exc
+
+        backend = distro_packages.build_backend(self.config, self.runner)
+
+        if options.dry_run:
+            update = backend.inspect(self.current)
+            release = self._package_release(update)
+            self._print_package_plan(backend, update, options)
+            return UpdateResult("dry-run", release)
+
+        self._preflight_package()
+
+        if self.config.refresh_package_index:
+            backend.refresh()
+        update = backend.inspect(self.current)
+        release = self._package_release(update)
+        LOGGER.info(
+            "preflight OK: package %s -> %s (%s, running %s)",
+            update.installed_version or "none",
+            update.candidate_version,
+            backend.describe(),
+            current_version,
+        )
+
+        if update.pending_reboot and not options.force:
+            installed_release = _installed_release_for_package(
+                update
+            ) or update.installed_version
+            LOGGER.info(
+                "kernel package %s is already installed; reboot to activate it",
+                update.candidate_version,
+            )
+            self.state.record_check(update.candidate_version)
+            self._save_state()
+            return UpdateResult("pending-reboot", release, installed_release)
+
+        if not update.update_available and not options.force:
+            LOGGER.info(
+                "kernel package is already up to date (installed %s, "
+                "candidate %s)",
+                update.installed_version or "none",
+                update.candidate_version,
+            )
+            self.state.record_check(update.candidate_version)
+            self._save_state()
+            return UpdateResult("up-to-date", release)
+
+        self._confirm_package(backend, update, options)
+
+        try:
+            with update_lock(self.config.lock_path):
+                return self._execute_package_locked(
+                    backend, update, options
+                )
+        except Exception as exc:
+            self.state.record_error(str(exc))
+            self._save_state()
+            raise
+
+    def _execute_package_locked(
+        self,
+        backend: distro_packages.PackageBackend,
+        update: distro_packages.PackageUpdate,
+        options: UpdateOptions,
+    ) -> UpdateResult:
+        self.config.work_dir.mkdir(parents=True, exist_ok=True)
+        before = set(installed_module_releases())
+
+        self._step(1, 4, "Download and install prebuilt packages")
+        backend.install()
+        kernel_release = self._detect_package_release(
+            update, before, set(installed_module_releases())
+        )
+
+        self._step(2, 4, "Verify installed kernel")
+        self._verify_install(kernel_release)
+
+        self._step(3, 4, "Refresh initramfs and bootloader")
+        if self.config.update_initramfs or self.config.update_bootloader:
+            LOGGER.info(
+                "the %s package post-install scripts handle initramfs and "
+                "bootloader updates",
+                backend.name,
+            )
+
+        self._step(4, 4, "Record state")
+        self.state.record_check(update.candidate_version)
+        self.state.record_install(
+            update.candidate_version,
+            kernel_release,
+            update.description,
+            self.current,
+        )
+        self._save_state()
+
+        if options.reboot:
+            self._schedule_reboot(kernel_release)
+
+        LOGGER.info(
+            "kernel package %s installed (%s); running kernel remains %s",
+            update.candidate_version,
+            kernel_release,
+            self.current,
+        )
+        return UpdateResult(
+            "installed", self._package_release(update), kernel_release
+        )
+
+    @staticmethod
+    def _package_release(update: distro_packages.PackageUpdate) -> KernelRelease:
+        return KernelRelease(
+            version=update.kernel_version,
+            moniker=update.manager,
+            source=update.description,
+        )
+
+    @staticmethod
+    def _detect_package_release(
+        update: distro_packages.PackageUpdate,
+        before: set,
+        after: set,
+    ) -> str:
+        candidates = after - before
+        if not candidates:
+            prefix = _package_release_prefix(update)
+            if prefix:
+                matching = {
+                    release
+                    for release in after
+                    if release == prefix
+                    or release.startswith(prefix + "-")
+                    or release.startswith(prefix + ".")
+                }
+                if matching:
+                    candidates = matching
+        if not candidates:
+            matched = _matching_installed_release(
+                update.kernel_version, list(after)
+            )
+            if matched:
+                candidates = {matched}
+        if not candidates:
+            candidates = after
+
+        parsed = []
+        for release in candidates:
+            try:
+                parsed.append((KernelVersion.parse(release).sort_key, release))
+            except VersionError:
+                continue
+        if parsed:
+            return max(parsed)[1]
+
+        LOGGER.warning(
+            "cannot determine the installed kernel release from /lib/modules; "
+            "recording package version %s instead",
+            update.candidate_version,
+        )
+        return update.kernel_version
+
+    def _preflight_package(self) -> None:
+        if not is_linux():
+            raise UpdateError("kernel updates are only supported on Linux")
+        geteuid = getattr(os, "geteuid", None)
+        if geteuid is not None and geteuid() != 0:
+            raise UpdateError("kernel updates must run as root (try sudo)")
+
+        available = free_gb(self.config.work_dir)
+        if available < self.config.package_min_free_gb:
+            raise UpdateError(
+                "only {:.1f} GiB free under {}; at least {} GiB is required "
+                "(packages.min_free_gb)".format(
+                    available,
+                    self.config.work_dir,
+                    self.config.package_min_free_gb,
+                )
+            )
+        boot = Path("/boot")
+        if boot.is_dir():
+            boot_free = free_gb(boot)
+            if boot_free < 0.5:
+                LOGGER.warning(
+                    "/boot has only %.0f MiB free; package installation may fail",
+                    boot_free * 1024,
+                )
+        else:
+            LOGGER.warning(
+                "/boot does not exist; the package may install without a "
+                "bootable kernel entry"
+            )
+        if secure_boot_enabled(self.runner) is True:
+            LOGGER.info(
+                "Secure Boot is enabled; distro kernel packages are normally "
+                "signed by the distribution (package mode does not build an "
+                "unsigned kernel)"
+            )
+
+    def _confirm_package(
+        self,
+        backend: distro_packages.PackageBackend,
+        update: distro_packages.PackageUpdate,
+        options: UpdateOptions,
+    ) -> None:
+        if options.assume_yes:
+            return
+        LOGGER.info("current kernel : %s", self.current)
+        LOGGER.info("method         : prebuilt packages (%s)", backend.name)
+        LOGGER.info("packages       : %s", ", ".join(backend.packages))
+        LOGGER.info("installed      : %s", update.installed_version or "none")
+        LOGGER.info("candidate      : %s", update.candidate_version)
+        LOGGER.info("kernel base    : %s", update.kernel_version)
+        LOGGER.info("build          : skipped")
+        LOGGER.info("reboot         : %s", "yes" if options.reboot else "no")
+        if not sys.stdin.isatty():
+            raise UpdateError("confirmation required; rerun with --yes")
+        try:
+            answer = input("Install these kernel packages? [y/N] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes"):
+            raise UpdateError("aborted by user")
+
+    def _print_package_plan(
+        self,
+        backend: distro_packages.PackageBackend,
+        update: distro_packages.PackageUpdate,
+        options: UpdateOptions,
+    ) -> None:
+        LOGGER.info("dry-run plan")
+        LOGGER.info("  current kernel : %s", self.current)
+        LOGGER.info("  method         : package (%s)", backend.name)
+        LOGGER.info("  packages       : %s", ", ".join(backend.packages))
+        LOGGER.info("  installed      : %s", update.installed_version or "none")
+        LOGGER.info("  candidate      : %s", update.candidate_version)
+        LOGGER.info("  kernel base    : %s", update.kernel_version)
+        LOGGER.info(
+            "  refresh index  : %s",
+            "yes" if self.config.refresh_package_index else "no",
+        )
+        LOGGER.info("  install        : %s", " ".join(backend.install_command()))
+        LOGGER.info("  source build   : skipped")
+        LOGGER.info("  config/patches : not used by package mode")
+        LOGGER.info("  reboot         : %s", "yes" if options.reboot else "no")
 
     def _execute_locked(
         self, release: KernelRelease, options: UpdateOptions

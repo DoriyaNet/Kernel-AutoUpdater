@@ -16,6 +16,9 @@ from typing import List, Optional
 
 DEFAULT_CONFIG_TEXT = """\
 [updater]
+# build: download kernel.org sources and compile locally
+# package: install prebuilt kernels from the distro repository (apt/dnf)
+update_method = build
 # stable | longterm | mainline | longterm:6.12
 channel = stable
 feed_url = https://www.kernel.org/releases.json
@@ -40,6 +43,14 @@ localversion = -kau
 jobs = 0
 keep_build_dir = false
 clear_distro_keys = true
+
+[packages]
+# auto | apt | dnf
+manager = auto
+# auto picks linux-image-generic/linux-image-<arch> or kernel
+kernel_packages = auto
+refresh_package_index = true
+min_free_gb = 2
 
 [install]
 update_initramfs = true

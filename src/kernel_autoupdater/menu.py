@@ -66,6 +66,7 @@ class _Setting:
 
 
 _SETTINGS: Tuple[_Setting, ...] = (
+    _Setting("更新方式", "updater", "update_method", "method", "update_method"),
     _Setting("更新通道", "updater", "channel", "channel", "channel"),
     _Setting("自动更新内核", "updater", "auto_update", "bool", "auto_update"),
     _Setting("自动重启", "updater", "auto_reboot", "bool", "auto_reboot"),
@@ -129,9 +130,40 @@ _SETTINGS: Tuple[_Setting, ...] = (
         "bool",
         "update_bootloader",
     ),
+    _Setting(
+        "包管理器（auto/apt/dnf）",
+        "packages",
+        "manager",
+        "text",
+        "package_manager",
+    ),
+    _Setting(
+        "内核包（auto = 自动选择）",
+        "packages",
+        "kernel_packages",
+        "text",
+        "kernel_packages",
+    ),
+    _Setting(
+        "刷新软件源索引",
+        "packages",
+        "refresh_package_index",
+        "bool",
+        "refresh_package_index",
+    ),
+    _Setting(
+        "包更新最低剩余空间（GB）",
+        "packages",
+        "min_free_gb",
+        "int",
+        "package_min_free_gb",
+    ),
 )
 
 _CHANNEL_SETTING = _Setting("更新通道", "updater", "channel", "channel", "channel")
+_METHOD_SETTING = _Setting(
+    "更新方式", "updater", "update_method", "method", "update_method"
+)
 _CHANNEL_CHOICES: Tuple[str, ...] = (
     "stable",
     "longterm",
@@ -143,6 +175,12 @@ _CHANNEL_LABELS = {
     "longterm": "长期支持 longterm",
     "mainline": "主线 mainline",
     "longterm:6.12": "LTS 6.12",
+}
+
+_METHOD_CHOICES: Tuple[str, ...] = ("build", "package")
+_METHOD_LABELS = {
+    "build": "源码编译 build（kernel.org）",
+    "package": "发行版预编译包 package（apt/dnf）",
 }
 
 
@@ -171,8 +209,9 @@ def _header_lines(config: Config, config_path: Path, version: str) -> List[str]:
     lines = [
         "Kernel AutoUpdater {}".format(version),
         "运行内核: {}".format(running_kernel()),
-        "更新通道: {}   自动更新: {}   自动重启: {}".format(
-            config.channel,
+        "更新方式: {} ({})   自动更新: {}   自动重启: {}".format(
+            config.update_method,
+            config.channel if config.update_method == "build" else config.package_manager,
             _on_off(config.auto_update),
             _on_off(config.auto_reboot),
         ),
@@ -508,6 +547,69 @@ def _channel_selector(
         return new_config, "更新通道已设为 {}。".format(value)
 
 
+def _method_selector(
+    curses,
+    stdscr,
+    config: Config,
+    config_path: Path,
+    version: str,
+) -> Tuple[Config, str]:
+    selected = (
+        _METHOD_CHOICES.index(config.update_method)
+        if config.update_method in _METHOD_CHOICES
+        else 0
+    )
+    message = ""
+
+    while True:
+        items = []
+        for choice in _METHOD_CHOICES:
+            suffix = "  (当前)" if choice == config.update_method else ""
+            items.append(
+                "{}  [{}]{}".format(
+                    _METHOD_LABELS.get(choice, choice), choice, suffix
+                )
+            )
+
+        _draw_screen(
+            curses,
+            stdscr,
+            _header_lines(config, config_path, version),
+            "设置 > 更新方式",
+            items,
+            selected,
+            _CHANNEL_INSTRUCTIONS,
+            message,
+        )
+        key = stdscr.getch()
+        if key == -1:
+            return config, ""
+        if key == getattr(curses, "KEY_RESIZE", -1):
+            message = ""
+            continue
+        if key in (27, ord("q")):
+            return config, ""
+        if key in (getattr(curses, "KEY_UP", -1), ord("k")):
+            selected = (selected - 1) % len(items)
+            message = ""
+            continue
+        if key in (getattr(curses, "KEY_DOWN", -1), ord("j")):
+            selected = (selected + 1) % len(items)
+            message = ""
+            continue
+        if key not in (10, 13, getattr(curses, "KEY_ENTER", -1)):
+            continue
+
+        value = _METHOD_CHOICES[selected]
+        new_config, result_message = _save_setting(
+            config, config_path, _METHOD_SETTING, value
+        )
+        if new_config is None:
+            message = result_message
+            continue
+        return new_config, "更新方式已设为 {}。".format(value)
+
+
 def _settings_loop(
     curses,
     stdscr,
@@ -551,6 +653,12 @@ def _settings_loop(
 
         setting = _SETTINGS[selected]
         message = ""
+
+        if setting.kind == "method":
+            config, message = _method_selector(
+                curses, stdscr, config, config_path, version
+            )
+            continue
 
         if setting.kind == "channel":
             config, message = _channel_selector(

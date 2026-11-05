@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass
 from typing import List
 
+from kernel_autoupdater import packages as distro_packages
 from kernel_autoupdater.config import Config
 from kernel_autoupdater.runner import CommandRunner
 from kernel_autoupdater.system import (
@@ -35,6 +36,7 @@ def _command_check(runner: CommandRunner, name: str, commands: List[str]) -> Che
 
 
 def run_doctor(config: Config, runner: CommandRunner) -> List[Check]:
+    package_mode = config.update_method == "package"
     checks: List[Check] = []
     checks.append(
         Check(
@@ -62,23 +64,7 @@ def run_doctor(config: Config, runner: CommandRunner) -> List[Check]:
             str(config.source_path) if config.source_path else "using built-in defaults",
         )
     )
-    checks.append(
-        Check(
-            "OK" if config.patches_dir.is_dir() else "WARN",
-            "patches",
-            str(config.patches_dir),
-        )
-    )
-
-    compiler = "gcc" if runner.which("gcc") else "cc"
-    checks.append(_command_check(runner, "compiler", [compiler]))
     for name, commands, optional in [
-        ("make", ["make"], False),
-        ("kernel build tools", ["bc", "flex", "bison", "perl"], False),
-        ("archive tools", ["tar"], False),
-        ("patch", ["patch"], True),
-        ("pahole/BTF", ["pahole"], True),
-        ("initramfs", ["dracut"], True),
         ("systemd", ["systemctl"], True),
     ]:
         check = _command_check(runner, name, commands)
@@ -86,38 +72,91 @@ def run_doctor(config: Config, runner: CommandRunner) -> List[Check]:
             check.status = "WARN"
         checks.append(check)
 
-    if runner.which("update-initramfs"):
-        checks.append(Check("OK", "initramfs", "update-initramfs"))
-    elif runner.which("mkinitcpio"):
+    package_backend = None
+    if package_mode:
+        try:
+            package_backend = distro_packages.build_backend(config, runner)
+            checks.append(
+                Check("OK", "package manager", package_backend.describe())
+            )
+            try:
+                update = package_backend.inspect(running_kernel())
+                checks.append(
+                    Check(
+                        "OK",
+                        "kernel package",
+                        "installed {} / candidate {}".format(
+                            update.installed_version or "none",
+                            update.candidate_version,
+                        ),
+                    )
+                )
+            except distro_packages.PackageError as exc:
+                checks.append(Check("WARN", "kernel package", str(exc)))
+        except distro_packages.PackageError as exc:
+            checks.append(Check("FAIL", "package manager", str(exc)))
+    else:
         checks.append(
             Check(
-                "WARN",
-                "initramfs",
-                "mkinitcpio needs a custom preset for this kernel",
+                "OK" if config.patches_dir.is_dir() else "WARN",
+                "patches",
+                str(config.patches_dir),
             )
         )
+        compiler = "gcc" if runner.which("gcc") else "cc"
+        checks.append(_command_check(runner, "compiler", [compiler]))
+        for name, commands, optional in [
+            ("make", ["make"], False),
+            ("kernel build tools", ["bc", "flex", "bison", "perl"], False),
+            ("archive tools", ["tar"], False),
+            ("patch", ["patch"], True),
+            ("pahole/BTF", ["pahole"], True),
+            ("initramfs", ["dracut"], True),
+        ]:
+            check = _command_check(runner, name, commands)
+            if check.status == "FAIL" and optional:
+                check.status = "WARN"
+            checks.append(check)
 
-    try:
-        kind, source = find_kernel_config(config.config_source, running_kernel())
-        checks.append(
-            Check(
-                "OK",
-                "kernel config",
-                "{} ({})".format(source or kind, kind),
+        if runner.which("update-initramfs"):
+            checks.append(Check("OK", "initramfs", "update-initramfs"))
+        elif runner.which("mkinitcpio"):
+            checks.append(
+                Check(
+                    "WARN",
+                    "initramfs",
+                    "mkinitcpio needs a custom preset for this kernel",
+                )
             )
-        )
-    except SystemCheckError as exc:
-        checks.append(Check("FAIL", "kernel config", str(exc)))
+
+        try:
+            kind, source = find_kernel_config(
+                config.config_source, running_kernel()
+            )
+            checks.append(
+                Check(
+                    "OK",
+                    "kernel config",
+                    "{} ({})".format(source or kind, kind),
+                )
+            )
+        except SystemCheckError as exc:
+            checks.append(Check("FAIL", "kernel config", str(exc)))
 
     try:
         available = free_gb(config.work_dir)
-        status = "OK" if available >= config.min_free_gb else "FAIL"
+        required = (
+            config.package_min_free_gb
+            if package_mode
+            else config.min_free_gb
+        )
+        status = "OK" if available >= required else "FAIL"
         checks.append(
             Check(
                 status,
                 "disk space",
                 "{:.1f} GiB free, {} GiB required".format(
-                    available, config.min_free_gb
+                    available, required
                 ),
             )
         )
@@ -126,19 +165,40 @@ def run_doctor(config: Config, runner: CommandRunner) -> List[Check]:
 
     secure = secure_boot_enabled(runner)
     if secure is True:
-        checks.append(
-            Check(
-                "WARN",
-                "secure boot",
-                "enabled; this tool installs unsigned kernels",
+        if package_mode:
+            checks.append(
+                Check(
+                    "OK",
+                    "secure boot",
+                    "enabled; distro kernel packages are normally signed",
+                )
             )
-        )
+        else:
+            checks.append(
+                Check(
+                    "WARN",
+                    "secure boot",
+                    "enabled; this tool installs unsigned kernels",
+                )
+            )
     elif secure is False:
         checks.append(Check("OK", "secure boot", "disabled"))
     else:
         checks.append(Check("WARN", "secure boot", "unknown (mokutil unavailable)"))
 
-    if config.verify_pgp:
+    if package_mode and package_backend is not None:
+        checks.append(
+            Check(
+                "OK",
+                "package signing",
+                "repository metadata and packages are verified by {}".format(
+                    config.package_manager
+                    if config.package_manager != "auto"
+                    else "the package manager"
+                ),
+            )
+        )
+    elif config.verify_pgp:
         if runner.which("gpg") and config.pgp_keyring.is_file():
             checks.append(Check("OK", "PGP", str(config.pgp_keyring)))
         else:

@@ -9,17 +9,20 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional, Sequence
 
 from kernel_autoupdater import __version__, kernelorg
+from kernel_autoupdater import packages as distro_packages
 from kernel_autoupdater.builder import (
     CheckResult,
     UpdateError,
     UpdateOptions,
     Updater,
     check_for_update,
+    check_package_update,
 )
 from kernel_autoupdater.config import (
     DEFAULT_CONFIG_PATH,
@@ -51,8 +54,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kau",
         description=(
-            "Check, build and install new Linux kernels from kernel.org while "
-            "keeping the running kernel as a fallback."
+            "Check, build or install new Linux kernels from kernel.org or "
+            "distro package repositories while keeping the running kernel "
+            "as a fallback."
         ),
     )
     parser.add_argument(
@@ -85,14 +89,25 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--json", action="store_true", help="machine-readable output")
     check.add_argument(
-        "--offline", action="store_true", help="use the cached release feed"
+        "--offline",
+        action="store_true",
+        help="use the cached release feed (build mode)",
+    )
+    check.add_argument(
+        "--method",
+        choices=("build", "package"),
+        help="override updater.update_method for this run",
     )
     check.set_defaults(func=cmd_check)
 
     update = subparsers.add_parser(
-        "update", help="download, build and install the latest kernel"
+        "update", help="install the latest kernel (source build or package)"
     )
-    update.add_argument("--to", metavar="VERSION", help="install a specific version")
+    update.add_argument(
+        "--to",
+        metavar="VERSION",
+        help="install a specific kernel.org version (build mode only)",
+    )
     update.add_argument(
         "--dry-run", action="store_true", help="show the plan without changing anything"
     )
@@ -102,7 +117,10 @@ def _build_parser() -> argparse.ArgumentParser:
     update.add_argument(
         "--force",
         action="store_true",
-        help="install even if the target is not newer, or Secure Boot is enabled",
+        help=(
+            "install even if the target is not newer, or bypass the build-mode "
+            "Secure Boot check"
+        ),
     )
     update.add_argument(
         "--reboot", action="store_true", help="reboot after a successful install"
@@ -110,14 +128,21 @@ def _build_parser() -> argparse.ArgumentParser:
     update.add_argument(
         "--keep-build",
         action="store_true",
-        help="reuse an existing extracted source tree",
+        help="reuse an existing extracted source tree (build mode only)",
     )
     update.add_argument(
         "--defconfig",
         action="store_true",
-        help="use make defconfig instead of the running kernel config",
+        help="use make defconfig instead of the running kernel config (build mode only)",
     )
-    update.add_argument("--jobs", type=int, help="parallel build jobs")
+    update.add_argument(
+        "--jobs", type=int, help="parallel build jobs (build mode only)"
+    )
+    update.add_argument(
+        "--method",
+        choices=("build", "package"),
+        help="override updater.update_method for this run",
+    )
     update.set_defaults(func=cmd_update)
 
     auto = subparsers.add_parser(
@@ -125,6 +150,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="check and update when updater.auto_update is enabled (for systemd)",
     )
     auto.add_argument("--dry-run", action="store_true", help="do not change anything")
+    auto.add_argument(
+        "--method",
+        choices=("build", "package"),
+        help="override updater.update_method for this run",
+    )
     auto.set_defaults(func=cmd_auto)
 
     self_update = subparsers.add_parser(
@@ -156,7 +186,12 @@ def _build_parser() -> argparse.ArgumentParser:
     kernels.add_argument("--json", action="store_true", help="machine-readable output")
     kernels.set_defaults(func=cmd_kernels)
 
-    doctor = subparsers.add_parser("doctor", help="check host build prerequisites")
+    doctor = subparsers.add_parser("doctor", help="check host prerequisites")
+    doctor.add_argument(
+        "--method",
+        choices=("build", "package"),
+        help="override updater.update_method for this run",
+    )
     doctor.set_defaults(func=cmd_doctor)
 
     enable = subparsers.add_parser("enable", help="enable the systemd update timer")
@@ -189,12 +224,19 @@ def _fetch_feed(config: Config, offline: bool = False) -> kernelorg.Feed:
     )
 
 
+def _with_method(config: Config, method: Optional[str]) -> Config:
+    if method and method != config.update_method:
+        return replace(config, update_method=method)
+    return config
+
+
 def _check_result_payload(result: CheckResult) -> dict:
-    return {
+    payload = {
         "current": result.current,
         "current_base": result.current_base,
         "channel": result.channel,
-        "latest": result.latest.version,
+        "method": result.method,
+        "latest": result.latest_version,
         "latest_moniker": result.latest.moniker,
         "latest_released": result.latest.released,
         "source": result.latest.source,
@@ -203,14 +245,29 @@ def _check_result_payload(result: CheckResult) -> dict:
         "feed_stale": result.feed_stale,
         "installed_release": result.installed_release,
     }
+    if result.package is not None:
+        payload.update(
+            {
+                "package_manager": result.package.manager,
+                "package_names": list(result.package.packages),
+                "package_installed": result.package.installed_version,
+                "package_candidate": result.package.candidate_version,
+                "package_kernel_base": result.package.kernel_version,
+            }
+        )
+    return payload
 
 
 def cmd_check(args: argparse.Namespace, config: Config) -> int:
+    config = _with_method(config, getattr(args, "method", None))
     store = _state_store(config)
     state = store.load()
-    feed = _fetch_feed(config, offline=args.offline)
-    result = check_for_update(config, state, feed=feed)
-    state.record_check(result.latest.version)
+    if config.update_method == "package":
+        result = check_package_update(config, state, CommandRunner())
+    else:
+        feed = _fetch_feed(config, offline=args.offline)
+        result = check_for_update(config, state, feed=feed)
+    state.record_check(result.latest_version)
     _save_state(store, state)
 
     if result.feed_stale:
@@ -220,9 +277,36 @@ def cmd_check(args: argparse.Namespace, config: Config) -> int:
         print(json.dumps(_check_result_payload(result), indent=2, sort_keys=True))
     else:
         print("Current kernel : {} ({})".format(result.current, result.current_base))
-        print("Channel        : {}".format(result.channel))
-        print("Latest release : {}".format(result.latest.version))
-        if result.latest.released:
+        if result.method == "package" and result.package is not None:
+            print(
+                "Method         : package ({})".format(result.package.manager)
+            )
+            print(
+                "Kernel packages: {}".format(
+                    ", ".join(result.package.packages)
+                )
+            )
+            print(
+                "Installed pkg  : {}".format(
+                    result.package.installed_version or "not installed"
+                )
+            )
+            print(
+                "Candidate pkg  : {}".format(result.package.candidate_version)
+            )
+            print(
+                "Kernel base    : {}".format(result.package.kernel_version)
+            )
+        else:
+            print("Method         : source build")
+            print("Channel        : {}".format(result.channel))
+        latest_label = (
+            "Latest package"
+            if result.method == "package"
+            else "Latest release"
+        )
+        print("{} : {}".format(latest_label, result.latest_version))
+        if result.latest.released and result.method != "package":
             print("Released       : {}".format(result.latest.released))
         print("Source         : {}".format(result.latest.source))
         print("Update available: {}".format("yes" if result.update_available else "no"))
@@ -239,9 +323,12 @@ def cmd_check(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_update(args: argparse.Namespace, config: Config) -> int:
+    config = _with_method(config, getattr(args, "method", None))
     if args.jobs is not None and args.jobs < 1:
         raise ConfigError("--jobs must be >= 1")
-    runner = CommandRunner(dry_run=args.dry_run)
+    runner = CommandRunner(
+        dry_run=args.dry_run and config.update_method != "package"
+    )
     updater = Updater(config, runner, _state_store(config))
     options = UpdateOptions(
         target=args.to,
@@ -258,16 +345,29 @@ def cmd_update(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_auto(args: argparse.Namespace, config: Config) -> int:
+    config = _with_method(config, getattr(args, "method", None))
     store = _state_store(config)
     state = store.load()
     try:
-        feed = _fetch_feed(config)
-        result = check_for_update(config, state, feed=feed)
+        if config.update_method == "package":
+            result = check_package_update(
+                config,
+                state,
+                CommandRunner(),
+                refresh=bool(
+                    config.refresh_package_index
+                    and getattr(os, "geteuid", lambda: 1)() == 0
+                ),
+            )
+            feed = None
+        else:
+            feed = _fetch_feed(config)
+            result = check_for_update(config, state, feed=feed)
     except Exception as exc:
         state.record_error(str(exc))
         _save_state(store, state)
         raise
-    state.record_check(result.latest.version)
+    state.record_check(result.latest_version)
     _save_state(store, state)
 
     if result.pending_reboot:
@@ -282,12 +382,18 @@ def cmd_auto(args: argparse.Namespace, config: Config) -> int:
     if not config.auto_update:
         LOGGER.info(
             "kernel %s is available but updater.auto_update is false",
-            result.latest.version,
+            result.latest_version,
         )
         return 0
 
-    runner = CommandRunner(dry_run=args.dry_run)
-    updater = Updater(config, runner, store)
+    runner = CommandRunner(
+        dry_run=args.dry_run and config.update_method != "package"
+    )
+    updater_config = config
+    if config.update_method == "package" and not args.dry_run:
+        # cmd_auto already refreshed the package index for the check above.
+        updater_config = replace(config, refresh_package_index=False)
+    updater = Updater(updater_config, runner, store)
     updater.execute(
         UpdateOptions(
             dry_run=args.dry_run,
@@ -324,9 +430,19 @@ def cmd_status(args: argparse.Namespace, config: Config) -> int:
     store = _state_store(config)
     state = store.load()
     runner = CommandRunner()
+    package_manager = config.package_manager
+    if config.update_method == "package" and package_manager == "auto":
+        try:
+            package_manager = distro_packages.detect_manager(runner)
+        except distro_packages.PackageError:
+            pass
     payload = {
         "running": running_kernel(),
         "channel": config.channel,
+        "update_method": config.update_method,
+        "package_manager": package_manager,
+        "package_manager_config": config.package_manager,
+        "kernel_packages": config.kernel_packages,
         "config": str(config.source_path) if config.source_path else None,
         "work_dir": str(config.work_dir),
         "auto_update": config.auto_update,
@@ -352,7 +468,12 @@ def cmd_status(args: argparse.Namespace, config: Config) -> int:
         return 0
 
     print("Running kernel : {}".format(payload["running"]))
-    print("Channel        : {}".format(payload["channel"]))
+    print("Update method  : {}".format(payload["update_method"]))
+    if config.update_method == "build":
+        print("Channel        : {}".format(payload["channel"]))
+    else:
+        print("Package manager: {}".format(payload["package_manager"]))
+        print("Kernel packages: {}".format(payload["kernel_packages"]))
     print("Config         : {}".format(payload["config"] or "built-in defaults"))
     print("Work dir       : {}".format(payload["work_dir"]))
     print("Auto update    : {}".format("yes" if config.auto_update else "no"))
@@ -414,6 +535,7 @@ def cmd_kernels(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace, config: Config) -> int:
+    config = _with_method(config, getattr(args, "method", None))
     checks = run_doctor(config, CommandRunner())
     print_checks(checks)
     return 1 if any(check.status == "FAIL" for check in checks) else 0
@@ -454,7 +576,12 @@ def _menu_update(config: Config) -> int:
         print("Kernel installation requires root. Re-run with: sudo kau")
         return 1
     print("Current kernel: {}".format(running_kernel()))
-    print("Channel       : {}".format(config.channel))
+    print("Update method : {}".format(config.update_method))
+    if config.update_method == "build":
+        print("Channel       : {}".format(config.channel))
+    else:
+        print("Package manager: {}".format(config.package_manager))
+        print("Kernel packages: {}".format(config.kernel_packages))
     answer = input("Install the latest kernel now? [y/N] ").strip().lower()
     if answer not in ("y", "yes"):
         print("Cancelled.")
@@ -608,6 +735,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         kernelorg.FeedError,
         kernelorg.ReleaseNotFoundError,
         kernelorg.DownloadError,
+        distro_packages.PackageError,
         SelfUpdateError,
         VersionError,
         OSError,
